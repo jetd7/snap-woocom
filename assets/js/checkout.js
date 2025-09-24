@@ -303,8 +303,8 @@ jQuery(document).ready(function($) {
      */
     function handleReturningCustomer() {
         // Check if customer has a previously approved application
-        const approvedApplicationId = localStorage.getItem('applicationId');
-        const isApproved = localStorage.getItem('snapFinanceApproved');
+        const approvedApplicationId = localStorage.getItem('snap_application_id');
+        const isApproved = localStorage.getItem('snap_finance_approved');
         
         if (approvedApplicationId && isApproved === 'true') {
             console.log('👤 Returning approved customer detected');

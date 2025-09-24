@@ -197,6 +197,7 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
         const params = new URLSearchParams();
         params.set('application_id', applicationId);
         params.set('token', token);
+        try { params.set('nonce', window.snap_params?.nonce || ''); } catch(_) {}
 
         const res = await fetch(ajaxurl, {
           method: 'POST',
@@ -248,10 +249,10 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
         applicationId = appId;
         applicationToken = token;
         
-        // Store in localStorage for persistence
-        localStorage.setItem('snapApplicationId', applicationId);
-        localStorage.setItem('snapApplicationToken', token);
-        localStorage.setItem('snapApplicationStatus', 'pending');
+        // Store in localStorage for persistence (standardized snake_case keys)
+        localStorage.setItem('snap_application_id', applicationId);
+        localStorage.setItem('snap_token', token);
+        localStorage.setItem('snap_application_status', 'pending');
         
         // Block checkout submission
         this.blockCheckoutSubmission();
@@ -635,10 +636,10 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
      * @param {string} status - Application status
      */
     updateStorage(status) {
-      localStorage.setItem('snapApplicationStatus', status);
-      if (applicationId) localStorage.setItem('snapApplicationId', applicationId);
-      if (applicationToken) localStorage.setItem('snapApplicationToken', applicationToken);
-      if (status === 'approved') localStorage.setItem('snapFinanceApproved', 'true');
+      localStorage.setItem('snap_application_status', status);
+      if (applicationId) localStorage.setItem('snap_application_id', applicationId);
+      if (applicationToken) localStorage.setItem('snap_token', applicationToken);
+      if (status === 'approved') localStorage.setItem('snap_finance_approved', 'true');
     },
 
     /**
@@ -662,11 +663,11 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
         applicationId = null;
         applicationToken = null;
         
-        // Clear localStorage
-        localStorage.removeItem('snapApplicationId');
-        localStorage.removeItem('snapApplicationToken');
-        localStorage.removeItem('snapApplicationStatus');
-        localStorage.removeItem('snapFinanceApproved');
+        // Clear localStorage (standardized keys)
+        localStorage.removeItem('snap_application_id');
+        localStorage.removeItem('snap_token');
+        localStorage.removeItem('snap_application_status');
+        localStorage.removeItem('snap_finance_approved');
         
         // Clear any inline messages
         this.clearInlineMessages();

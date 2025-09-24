@@ -89,12 +89,10 @@ class WC_Snap_Finance_Gateway extends WC_Payment_Gateway {
         add_action( 'wp_head', array( $this, 'add_content_protection_whitelist' ) );
         add_action( 'wp_head', array( $this, 'add_snap_styles' ) );
 
-        add_action( 'wp_ajax_save_snap_application', array( $this, 'handle_save_snap_application' ) );
-        add_action( 'wp_ajax_nopriv_save_snap_application', array( $this, 'handle_save_snap_application' ) );
+		// Removed duplicate save handler; wc_ajax version in plugin handles this securely
         add_action( 'wp_ajax_snap_set_chosen', array( $this, 'ajax_set_chosen_method' ) );
         add_action( 'wp_ajax_nopriv_snap_set_chosen', array( $this, 'ajax_set_chosen_method' ) );
-        add_action( 'wp_ajax_snap_mark_funded', array( $this, 'ajax_mark_funded' ) );
-        add_action( 'wp_ajax_nopriv_snap_mark_funded', array( $this, 'ajax_mark_funded' ) );
+		// Removed insecure finalize AJAX endpoint; rely on secured REST route instead
 
         // [REMOVED] Hiding gateway by total; see the new method below which is now a no-op
         add_filter( 'woocommerce_available_payment_gateways', array( $this, 'restrict_payment_methods_by_cart_total' ) );
@@ -654,108 +652,9 @@ class WC_Snap_Finance_Gateway extends WC_Payment_Gateway {
         return array( 'result' => 'failure' );
     }
 
-    public function ajax_mark_funded() {
-        $app_id = isset($_POST['application_id']) ? sanitize_text_field( wp_unslash( $_POST['application_id'] ) ) : '';
-        $token  = isset($_POST['token']) ? sanitize_text_field( wp_unslash( $_POST['token'] ) ) : '';
-        if ( empty( $app_id ) || empty( $token ) ) {
-            wp_send_json_error( array( 'message' => 'missing app or token' ), 400 );
-        }
+    // ajax_mark_funded removed; use REST /snap/v1/funded instead
 
-        $orders = wc_get_orders( array(
-            'limit'      => 1,
-            'status'     => array( 'pending', 'on-hold' ),
-            'meta_key'   => '_snap_application_id',
-            'meta_value' => $app_id,
-            'orderby'    => 'date',
-            'order'      => 'DESC',
-            'return'     => 'ids',
-        ) );
-
-        if ( empty( $orders ) ) {
-            wp_send_json_error( array( 'message' => 'order not found' ), 404 );
-        }
-
-        $order_id = $orders[0];
-        $order    = wc_get_order( $order_id );
-        $order->payment_complete( $app_id );
-        $order->add_order_note( sprintf( __( 'Snap funded. Application %s confirmed by frontend.', 'snap-finance-gateway' ), $app_id ) );
-        wp_send_json_success( array( 'order_id' => $order_id ) );
-    }
-
-    public function handle_save_snap_application() {
-        check_ajax_referer( 'snap_finance_nonce', 'nonce' );
-
-        if ( ! WC()->session ) {
-            wp_send_json_error( 'Session not available' );
-        }
-
-        global $wpdb;
-        $table = $wpdb->prefix . 'snap_application_details';
-
-        $application_id       = sanitize_text_field( $_POST['application_id'] ?? '' );
-        $customer_email       = sanitize_email( $_POST['customer_email'] ?? '' );
-        $customer_first_name  = sanitize_text_field( $_POST['customer_first_name'] ?? '' );
-        $customer_last_name   = sanitize_text_field( $_POST['customer_last_name'] ?? '' );
-        $customer_phone       = sanitize_text_field( $_POST['customer_phone'] ?? '' );
-        $customer_address     = sanitize_textarea_field( $_POST['customer_address'] ?? '' );
-        $order_total          = floatval( $_POST['order_total'] ?? 0 );
-        $cart_id              = sanitize_text_field( $_POST['cart_id'] ?? '' );
-        $snap_token           = sanitize_text_field( $_POST['snap_token'] ?? '' );
-
-        if ( empty( $application_id ) || empty( $customer_email ) ) {
-            wp_send_json_error( 'Missing required fields' );
-        }
-
-        // Check if application already exists
-        $existing = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM $table WHERE snap_application_id = %s", $application_id ) );
-
-        if ( $existing ) {
-            // Update existing record
-            $updated = $wpdb->update(
-                $table,
-                array(
-                    'customer_email'      => $customer_email,
-                    'customer_first_name' => $customer_first_name,
-                    'customer_last_name'  => $customer_last_name,
-                    'customer_phone'      => $customer_phone,
-                    'customer_address'    => $customer_address,
-                    'order_total'         => $order_total,
-                    'cart_id'             => $cart_id,
-                    'updated_at'          => current_time( 'mysql' ),
-                ),
-                array( 'snap_application_id' => $application_id ),
-                array( '%s', '%s', '%s', '%s', '%s', '%f', '%s', '%s' ),
-                array( '%s' )
-            );
-            $result = $updated !== false;
-        } else {
-            $inserted = $wpdb->insert(
-                $table,
-                array(
-                    'snap_application_id' => $application_id,
-                    'customer_email'      => $customer_email,
-                    'customer_first_name' => $customer_first_name,
-                    'customer_last_name'  => $customer_last_name,
-                    'customer_phone'      => $customer_phone,
-                    'customer_address'    => $customer_address,
-                    'order_total'         => $order_total,
-                    'cart_id'             => $cart_id,
-                ),
-                array( '%s', '%s', '%s', '%s', '%s', '%s', '%f', '%s' )
-            );
-            $result = $inserted !== false;
-        }
-
-        if ( $result ) {
-            WC()->session->set( 'snap_application_id', $application_id );
-            if ( ! empty( $snap_token ) ) {
-                WC()->session->set( 'snap_token', $snap_token );
-            }
-            wp_send_json_success( array( 'message' => 'Application data saved', 'application_id' => $application_id ) );
-        } else {
-            wp_send_json_error( 'Failed to save application data' );
-        }
-    }
+    // handle_save_snap_application removed (duplicate of wc_ajax variant)
 
     public function ajax_set_chosen_method() {
         if ( function_exists( 'WC' ) ) {

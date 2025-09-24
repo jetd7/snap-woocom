@@ -286,6 +286,11 @@ add_action('wc_ajax_snap_save_application', 'snap_save_application_cb');
 add_action('wc_ajax_nopriv_snap_save_application', 'snap_save_application_cb');
 
 function snap_save_application_cb() {
+    // Require nonce for CSRF protection
+    $nonce = isset($_POST['nonce']) ? sanitize_text_field( wp_unslash( $_POST['nonce'] ) ) : '';
+    if ( ! $nonce || ! wp_verify_nonce( $nonce, 'snap_finance_nonce' ) ) {
+        wp_send_json_error( array( 'message' => 'Invalid nonce' ), 403 );
+    }
     $app_id = isset($_POST['application_id']) ? sanitize_text_field(wp_unslash($_POST['application_id'])) : '';
     $token  = isset($_POST['token']) ? sanitize_textarea_field(wp_unslash($_POST['token'])) : '';
     if (!$app_id || !$token) {
@@ -622,68 +627,7 @@ add_action( 'rest_api_init', function() {
     ) );
 } );
 
-// Seed handler: create pending order and bind application id (idempotent)
-if ( ! function_exists( 'snap_seed_order' ) ) {
-    function snap_seed_order( WP_REST_Request $req ) {
-        try {
-            // DEPRECATED: Do not create orders. Delegate to attach behavior.
-            $application_id = trim( (string) ( $req->get_param( 'application_id' ) ?? '' ) );
-            $invoice_number = sanitize_text_field( (string) ( $req->get_param( 'invoice_number' ) ?? '' ) );
-            $draft_order_id = (int) ( $req->get_param( 'draft_order_id' ) ?? 0 );
-            if ( $application_id === '' ) {
-                return new WP_REST_Response( array( 'success' => false, 'error' => 'missing_application_id' ), 400 );
-            }
-
-            // Resolve existing order: prefer provided draft_order_id, then session/attach helpers
-            $order_id = $draft_order_id;
-            if ( ! $order_id && function_exists( 'WC' ) && WC()->session ) {
-                $order_id = (int) ( WC()->session->get( 'order_awaiting_payment' ) ?: 0 );
-            }
-            if ( ! $order_id ) {
-                $order = snap_find_order_by_invoice( $invoice_number );
-                if ( $order ) { $order_id = (int) $order->get_id(); }
-            }
-            if ( ! $order_id ) {
-                $order_id = snap_find_blocks_draft_order_id( null );
-            }
-            if ( ! $order_id ) {
-                return new WP_REST_Response( array( 'success' => false, 'error' => 'no_draft_order' ), 409 );
-            }
-            $order = wc_get_order( (int) $order_id );
-            if ( ! $order ) {
-                return new WP_REST_Response( array( 'success' => false, 'error' => 'bad_draft_order' ), 500 );
-            }
-
-            $order->set_payment_method( 'snapfinance_refined' );
-            $order->set_payment_method_title( 'Snap Finance' );
-            $order->update_meta_data( '_snap_application_id', $application_id );
-            if ( $invoice_number !== '' ) { $order->update_meta_data( '_snap_invoice_number', $invoice_number ); }
-            // Only move checkout-draft → pending; never overwrite failed/cancelled/processing/etc.
-            $current_status = $order->get_status();
-            if ( $current_status === 'checkout-draft' ) {
-                $order->set_status( 'pending' );
-            }
-            $order->add_order_note( sprintf( 'Application attached to draft via seed (compat). Invoice %s.', $invoice_number !== '' ? $invoice_number : '(unknown)' ) );
-            $order->save();
-
-            if ( session_status() !== PHP_SESSION_ACTIVE ) { @session_start(); }
-            $_SESSION['snap_seeded_order_id'] = (int) $order_id;
-            if ( function_exists( 'WC' ) && WC()->session ) { WC()->session->set( 'snap_seeded_order_id', (int) $order_id ); }
-            if ( $invoice_number !== '' ) { snap_link_invoice_to_order( $invoice_number, (int) $order_id ); }
-            snap_set_signed_cookie( 'snap_seeded_order_id', (int) $order_id, DAY_IN_SECONDS );
-
-            return new WP_REST_Response( array(
-                'success'  => true,
-                'order_id' => (int) $order_id,
-                'status'   => $order->get_status(),
-                'order_received_url' => $order->get_checkout_order_received_url(),
-            ), 200 );
-        } catch ( Throwable $e ) {
-            error_log( 'SNAP: seed error: ' . $e->getMessage() );
-            return new WP_REST_Response( array( 'success' => false, 'error' => 'seed_exception' ), 500 );
-        }
-    }
-}
+// Removed deprecated seed handler; attach model is the single source of truth
 
 // Attach handler: bind app to existing draft order (no order creation)
 if ( ! function_exists( 'snap_rest_attach_cb' ) ) {
@@ -723,6 +667,10 @@ if ( ! function_exists( 'snap_rest_attach_cb' ) ) {
             $order->set_payment_method( 'snapfinance_refined' );
             $order->set_payment_method_title( 'Snap Finance' );
             if ( $invoice !== '' )  { $order->update_meta_data( '_snap_invoice_number', $invoice ); }
+            // Update application id (latest) and append to history for auditability
+            $app_ids = (array) $order->get_meta( '_snap_application_ids' );
+            $app_ids[] = $app_id;
+            $order->update_meta_data( '_snap_application_ids', array_values( array_unique( $app_ids ) ) );
             $order->update_meta_data( '_snap_application_id', $app_id );
             // Only move checkout-draft → pending; never overwrite failed/cancelled/processing/etc.
             $current_status = $order->get_status();

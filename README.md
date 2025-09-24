@@ -1,3 +1,9 @@
+## 0.5
+
+- Security Hardening: Added nonce verification to wc-ajax `snap_save_application_cb`; removed insecure finalize AJAX (`ajax_mark_funded`) and consolidated on secured REST `/snap/v1/funded`.
+- Code Cleanup: Removed deprecated `snap_seed_order` and duplicate class-based `handle_save_snap_application` to reduce redundancy.
+- Audit Improvements: `/attach` now appends to `_snap_application_ids` while keeping the latest `_snap_application_id` for lookups.
+- Robustness: Standardized localStorage keys to snake_case (`snap_application_id`, `snap_token`, `snap_application_status`, `snap_finance_approved`) and aligned Classic returning-customer detection.
 # Snap Finance WooCommerce Plugin v1.0.0
 
 A WordPress plugin that integrates Snap Finance UK's payment gateway with WooCommerce, allowing customers to apply for finance during checkout.
