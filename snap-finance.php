@@ -347,6 +347,26 @@ if ( ! function_exists( 'snap_clear_wc_session_after_finalize' ) ) {
 }
 
 if ( ! function_exists( 'snap_apply_progress_to_order' ) ) {
+    /**
+     * Map Snap application progressStatus → WooCommerce order status + attached note
+     *
+     * Mapping (source of truth):
+     *   2  PENDING                      → processing    | Note: "Application pending. Awaiting decision."
+     *   6  APPROVED                     → processing    | Note: "Application approved. Awaiting customer actions."
+     *   10 APPROVED_WITH_CONDITIONS     → processing    | Note: "Application approved with conditions."
+     *   22 PENDING_DOCS                 → processing    | Note: "Application requires additional documents."
+     *   26 PENDING_DEL (signed; awaiting delivery) → pending | Note: "Customer signed; awaiting merchant delivery..."
+     *   0  FUNDED  (treated as paid)    → payment_complete; ensure processing | Note: "Funded. Payment complete."
+     *   30 COMPLETE (terminal success)  → payment_complete; completed         | Note: "Snap lifecycle complete."
+     *   14 DENIED                       → failed       | Note: "Customer was declined by Snap..."
+     *   18 WITHDRAWN                    → cancelled    | Note: "Application withdrawn by customer."
+     *   -1/other ERROR/UNKNOWN          → on-hold      | Note: "Snap returned an error or unknown status..."
+     *
+     * Rules and guarantees:
+     * - Never upshift failed/cancelled orders on non-funded updates (only update meta/notes).
+     * - Only mark an order paid on 0 (FUNDED per our mapping) or 30 (COMPLETE).
+     * - Always attach context notes for merchant visibility in order admin.
+     */
     function snap_apply_progress_to_order( WC_Order $order, int $progressStatus, array $ctx = [] ): void {
         $app_id = isset( $ctx['application_id'] ) ? $ctx['application_id'] : null;
         $inv    = isset( $ctx['invoice_number'] ) ? $ctx['invoice_number'] : null;
@@ -365,32 +385,32 @@ if ( ! function_exists( 'snap_apply_progress_to_order' ) ) {
         }
 
         switch ( $progressStatus ) {
-            case 2: // PENDING
+            case 2: // PENDING → processing + note (awaiting decision)
                 if ( 'processing' !== $order->get_status() ) { $order->update_status( 'processing' ); }
                 snap_add_note( $order, 'Application pending. Awaiting decision.' );
                 break;
 
-            case 6: // APPROVED
+            case 6: // APPROVED → processing + note (awaiting customer action)
                 if ( 'processing' !== $order->get_status() ) { $order->update_status( 'processing' ); }
                 snap_add_note( $order, 'Application approved. Awaiting customer actions.' );
                 break;
 
-            case 10: // APPROVED_WITH_CONDITIONS
+            case 10: // APPROVED_WITH_CONDITIONS → processing + note
                 if ( 'processing' !== $order->get_status() ) { $order->update_status( 'processing' ); }
                 snap_add_note( $order, 'Application approved with conditions.' );
                 break;
 
-            case 22: // PENDING_DOCS
+            case 22: // PENDING_DOCS → processing + note
                 if ( 'processing' !== $order->get_status() ) { $order->update_status( 'processing' ); }
                 snap_add_note( $order, 'Application requires additional documents.' );
                 break;
 
-            case 26: // PENDING_DEL
+            case 26: // PENDING_DEL (signed; awaiting delivery) → pending + delivery/payout note
                 if ( 'pending' !== $order->get_status() ) { $order->update_status( 'pending' ); }
                 snap_add_note( $order, 'Customer signed; awaiting merchant delivery. Once the customer has received goods/service please confirm in your Snap Merchant Portal for next day payment.' );
                 break;
 
-            case 0: // FUNDED
+            case 0: // FUNDED → mark paid; ensure processing + note
                 if ( ! $order->is_paid() ) {
                     $order->payment_complete();
                     snap_add_note( $order, 'Funded. Payment complete.' );
@@ -402,23 +422,23 @@ if ( ! function_exists( 'snap_apply_progress_to_order' ) ) {
                 }
                 break;
 
-            case 30: // COMPLETE
+            case 30: // COMPLETE (terminal success) → mark paid; completed + note
                 if ( ! $order->is_paid() ) { $order->payment_complete(); }
                 if ( 'completed' !== $order->get_status() ) { $order->update_status( 'completed' ); }
                 snap_add_note( $order, 'Snap lifecycle complete.' );
                 break;
 
-            case 14: // DENIED
+            case 14: // DENIED → failed + decline note
                 if ( 'failed' !== $order->get_status() ) { $order->update_status( 'failed' ); }
                 snap_add_note( $order, 'Customer was declined by Snap. Try another lender or payment method. Customer can apply again with Snap in 30 days' );
                 break;
 
-            case 18: // WITHDRAWN
+            case 18: // WITHDRAWN → cancelled + note
                 if ( 'cancelled' !== $order->get_status() ) { $order->update_status( 'cancelled' ); }
                 snap_add_note( $order, 'Application withdrawn by customer.' );
                 break;
 
-            case -1: // ERROR
+            case -1: // ERROR/UNKNOWN → on-hold + diagnostic note
             default:
                 if ( 'on-hold' !== $order->get_status() ) { $order->update_status( 'on-hold' ); }
                 snap_add_note( $order, 'Snap returned an error or unknown status. Manual check required.' );
