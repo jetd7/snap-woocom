@@ -166,36 +166,7 @@ window.SnapRender = {
             }
             console.log('✅ STEP 1: Parameters validated');
 
-            // Check cart total limits
-            if (snapParams.cart_total !== undefined && 
-                snapParams.min_amount !== undefined && 
-                snapParams.max_amount !== undefined) {
-                
-                const cartTotal = parseFloat(snapParams.cart_total);
-                const minAmount = parseFloat(snapParams.min_amount);
-                const maxAmount = parseFloat(snapParams.max_amount);
-
-                if (cartTotal < minAmount || cartTotal > maxAmount) {
-                    console.log(`⚠️ Cart total £${cartTotal} outside Snap Finance limits (£${minAmount} - £${maxAmount})`);
-                    if (cartTotal < minAmount) {
-                        console.log(`Minimum Amount: Orders under £${minAmount} will be rejected`);
-                    } else if (cartTotal > maxAmount) {
-                        console.log(`Maximum Amount: Orders over £${maxAmount} will be rejected`);
-                    }
-                    this.showLimitsWarning(containerEl, minAmount, maxAmount);
-                    try { window.SnapApplication?.setLimitsGuard?.(true, minAmount, maxAmount, cartTotal); } catch(_) {}
-                    return;
-                } else {
-                    try {
-                        window.SnapApplication?.setLimitsGuard?.(false, minAmount, maxAmount, cartTotal);
-                        const st = window.SnapApplication?.getApplicationStatus?.();
-                        if (st && st.status !== 'pending') {
-                            // If not pending, restore submission (clears limits-only block)
-                            window.SnapApplication?.allowCheckoutSubmission?.();
-                        }
-                    } catch(_) {}
-                }
-            }
+            // Limits enforcement is handled server-side (Classic is_available, Blocks is_active)
 
             // Clear any existing overlays/messages just in case
             try { this.removeValidationOverlay(containerEl); } catch(_) {}
@@ -802,20 +773,7 @@ window.SnapRender = {
 
 
 
-    /**
-     * Show limits warning
-     * @param {HTMLElement} containerEl - Container element
-     * @param {number} minAmount - Minimum amount
-     * @param {number} maxAmount - Maximum amount
-     */
-    showLimitsWarning(containerEl, minAmount, maxAmount) {
-        containerEl.innerHTML = `
-            <div style="color: #d63638; background: #fcf0f1; border: 1px solid #d63638; padding: 10px; border-radius: 4px; margin: 10px 0; width: 100%; box-sizing: border-box;">
-                <strong>Snap Finance Limits</strong><br>
-                Snap is available on this store for baskets between £${minAmount.toFixed(2)} and £${maxAmount.toFixed(2)}.
-            </div>
-        `;
-    },
+    // Limits warning removed: hidden at source by gateway limits
 
     // (removed duplicate updateValidationMessagesOnly(messages))
 
