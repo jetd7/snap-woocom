@@ -293,21 +293,21 @@ CREATE TABLE wp_snap_application_details (
 
 ## 🔄 **Version History**
 
-### 2.6.12
+### 0.3
 - Added `/status` endpoint (server-verified progress logging) and client polling after session save
 - Added `/journey` endpoint for per-stage notes + CSV-friendly binary flags
 - Mapped DENIED (14) → failed with clear note; WITHDRAWN (18) remains cancelled
 - Clarified PENDING_DEL (26) note for merchant delivery confirmation and next-day payout
 - Client DENIED posts to `/funded` to sync server state without redirect; simplified code comments
 
-### 2.6.11
+### 0.2
 - Removed seed creation; adopted attach → enrich architecture
 - Added `/attach` endpoint; `/funded` is idempotent and non‑creating
 - Hide Snap outside £250–£10,000 (Classic + Blocks); server finalize remains a guard
 - Thank‑you page guards for Blocks APIs to avoid decodeEntities errors
 - Logging: ATTACH/FUNDED start/done lines; global order creation logs
 
-### **V2.0.0**
+### 0.1
 - Complete rewrite with modern architecture
 - Proper WooCommerce gateway implementation
 - Modular JavaScript structure
