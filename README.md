@@ -293,6 +293,11 @@ CREATE TABLE wp_snap_application_details (
 
 ## 🔄 **Version History**
 
+### 0.4
+- Centralized version handling via `SNAP_FINANCE_PLUGIN_VERSION` (PHP) and `snap_params.plugin_version` (JS); removed hardcoded versions in logs and icon URLs
+- Hide Snap outside limits at source (Classic `is_available`, Blocks `is_active`); removed frontend limits messaging
+- Added STEP 4 logs and explicit max-amount rejection logging
+
 ### 0.3
 - Added `/status` endpoint (server-verified progress logging) and client polling after session save
 - Added `/journey` endpoint for per-stage notes + CSV-friendly binary flags
