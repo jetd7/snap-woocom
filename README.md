@@ -255,7 +255,8 @@ The plugin includes comprehensive step-by-step logging:
 - `🎯 STEP 1: Starting Snap Finance render process`
 - `✅ STEP 2: SDK fully available immediately (snapuk.checkout.button ready)`
 - `✅ STEP 3: Snap SDK initialized with client_id`
-- `🧾 Built UK API transaction`
+- `🎯 STEP 4: Creating transaction data...`
+- `✅ STEP 4: Built UK API transaction`
 - `✅ STEP 5: SDK snapuk.checkout.button called successfully`
 
 ### **Common Issues**
@@ -263,6 +264,7 @@ The plugin includes comprehensive step-by-step logging:
 - **Button Not Appearing**: Verify `#snap-uk-checkout` container exists
 - **Credentials Error**: Ensure Merchant ID and Client ID are correct
 - **Minimum Amount**: Orders under £250 will be rejected
+- **Maximum Amount**: Orders over £10,000 will be rejected
 - **Pre-selected Method**: Button may not render immediately on page load (known issue)
 
 ## 📊 **Database Schema**

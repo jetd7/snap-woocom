@@ -177,6 +177,11 @@ window.SnapRender = {
 
                 if (cartTotal < minAmount || cartTotal > maxAmount) {
                     console.log(`⚠️ Cart total £${cartTotal} outside Snap Finance limits (£${minAmount} - £${maxAmount})`);
+                    if (cartTotal < minAmount) {
+                        console.log(`Minimum Amount: Orders under £${minAmount} will be rejected`);
+                    } else if (cartTotal > maxAmount) {
+                        console.log(`Maximum Amount: Orders over £${maxAmount} will be rejected`);
+                    }
                     this.showLimitsWarning(containerEl, minAmount, maxAmount);
                     try { window.SnapApplication?.setLimitsGuard?.(true, minAmount, maxAmount, cartTotal); } catch(_) {}
                     return;
@@ -238,6 +243,7 @@ window.SnapRender = {
                         // Update status on transaction
                         const prevStatus = this._getPreviousStatus(containerEl);
                         window.SnapTransaction.updateValidationStatus(transaction, messages, messages.length === 0);
+                        console.log('✅ STEP 4: Built UK API transaction');
                         
                         // Log transaction validation status
                         const validationSummary = window.SnapTransaction.getValidationSummary(transaction);
@@ -313,6 +319,7 @@ window.SnapRender = {
                     // Update status on transaction
                     const prevStatus = this._getPreviousStatus(containerEl);
                     window.SnapTransaction.updateValidationStatus(transaction, messages, messages.length === 0);
+                    console.log('✅ STEP 4: Built UK API transaction');
                     
                     // Log transaction validation status
                     const validationSummary = window.SnapTransaction.getValidationSummary(transaction);
