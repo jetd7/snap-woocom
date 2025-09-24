@@ -351,7 +351,7 @@ For technical support, feature requests, or licensing inquiries, please contact 
 
 ---
 
-**© 2024 FinMatch. All rights reserved.**
+**© 2025 FinMatch. All rights reserved.**
 
 ---
 
