@@ -13,6 +13,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 if (!class_exists('WC_Snap_Finance_Gateway')) {
 class WC_Snap_Finance_Gateway extends WC_Payment_Gateway {
 
+    // Shared business limits (for both Classic and Blocks)
+    const MIN_AMOUNT = 250.0;    // £250
+    const MAX_AMOUNT = 10000.0;  // £10,000
+
     // PHP 8.2+ explicit properties
     public $sandbox_merchant_id;
     public $sandbox_client_id;
@@ -325,8 +329,8 @@ class WC_Snap_Finance_Gateway extends WC_Payment_Gateway {
             'cart_total'   => ( function_exists( 'WC' ) && WC()->cart ) ? (float) WC()->cart->total : 0.0,
             'products'     => $products,
             'transaction'  => $transaction, // Add transaction data for Blocks
-            'min_amount'   => 250,  // Fixed Snap Finance minimum (£250)
-            'max_amount'   => 10000, // Fixed Snap Finance maximum (£10,000)
+            'min_amount'   => self::MIN_AMOUNT,
+            'max_amount'   => self::MAX_AMOUNT,
             'is_blocks'    => $is_blocks,
             'icon'         => plugins_url('assets/images/snap-logo.svg', dirname(__FILE__)) . '?v=1.0.0',
             // Expose gateway title/description so JS can use Woo settings in both Classic and Blocks
@@ -471,9 +475,7 @@ class WC_Snap_Finance_Gateway extends WC_Payment_Gateway {
         // Enforce min/max limits at the gateway level (Classic checkout visibility)
         if ( function_exists( 'WC' ) && WC()->cart ) {
             $total = (float) WC()->cart->total;
-            $min   = 250.0;
-            $max   = 10000.0;
-            if ( $total < $min || $total > $max ) {
+            if ( $total < self::MIN_AMOUNT || $total > self::MAX_AMOUNT ) {
                 return false;
             }
         }
@@ -763,8 +765,7 @@ class WC_Snap_Finance_Gateway extends WC_Payment_Gateway {
     }
 
     /**
-     * IMPORTANT: Do NOT hide the gateway — we show a warning on the frontend instead.
-     * [MODIFIED] Now a no-op to keep the method visible per UX requirement.
+     * No-op: Hiding occurs via is_available()/Blocks is_active() using shared limits.
      */
     public function restrict_payment_methods_by_cart_total( $available_gateways ) { // [MODIFIED]
         return $available_gateways; // keep visible; frontend displays min/max notice
@@ -967,9 +968,7 @@ if ( class_exists( '\Automattic\WooCommerce\Blocks\Payments\Integrations\Abstrac
             if ( ! $enabled ) { return false; }
             if ( function_exists( 'WC' ) && WC()->cart ) {
                 $total = (float) WC()->cart->total;
-                $min   = 250.0;
-                $max   = 10000.0;
-                if ( $total < $min || $total > $max ) {
+                if ( $total < \WC_Snap_Finance_Gateway::MIN_AMOUNT || $total > \WC_Snap_Finance_Gateway::MAX_AMOUNT ) {
                     return false;
                 }
             }
