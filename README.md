@@ -25,7 +25,7 @@ Highlights in 1.0.0
 - API Base: Production calls use `https://prod-api.snapfinance.co.uk` when not in test mode
 - Attach → Enrich (no seed creation): The plugin no longer creates a new order onApplicationId. Instead it attaches Snap metadata to the existing Woo Blocks draft order.
 - REST-first finalize: `POST /snap/v1/funded` verifies Snap status server‑side and transitions the same order. Idempotent and never creates.
-- Limits enforcement: Snap is hidden when total is outside £250–£10,000 (Classic `is_available`, Blocks `is_active`). Server finalize remains the final guard.
+- Limits enforcement: Snap is hidden when total is outside £250–£10,000 (Classic `is_available`, Blocks `is_active`). Frontend limits messaging removed; server finalize remains the final guard.
 - Thank‑you page hardening: Blocks APIs are guarded so the order confirmation page doesn’t throw console errors.
 - Server status logs and journey tracking added; DENIED maps to failed; PENDING_DEL note clarified; client sends DENIED to server without redirect.
 

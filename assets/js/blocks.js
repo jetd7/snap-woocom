@@ -5,7 +5,7 @@
  * ROBUST MOUNT TIMING FIX for default payment method issue.
  */
 
-console.log('🔧 Snap Finance Blocks v1.0.0: Starting registration...');
+console.log('🔧 Snap Finance Blocks:', (window.snap_params && window.snap_params.plugin_version) || 'unknown', 'Starting registration...');
 
 const registerPaymentMethod = window.wc?.wcBlocksRegistry?.registerPaymentMethod;
 
@@ -14,7 +14,7 @@ const settings = window.wc?.wcSettings?.getSetting?.('snapfinance_refined_data',
 console.log('🔧 Snap Finance Blocks: Settings from registry:', settings);
 
 // Get icon from settings or snap_params, with fallback
-const icon = settings.icon || settings.icons?.[0]?.src || window.snap_params?.icon || plugin_dir_url + 'assets/images/snap-logo.svg?v=1.0.0';
+const icon = settings.icon || settings.icons?.[0]?.src || window.snap_params?.icon || plugin_dir_url + 'assets/images/snap-logo.svg?v=' + ((window.snap_params && window.snap_params.plugin_version) || '1.0.0');
 console.log('🔧 Resolved icon URL:', icon);
 
 console.log('🔧 Snap Finance Blocks: Settings loaded:', settings);
@@ -157,7 +157,7 @@ console.log('🔧 Snap Finance Blocks: Payment method ready for registration');
 (function() {
     'use strict';
   
-console.log('🔧 Snap Finance Blocks Checkout Handler Loaded (v1.0.0)');
+console.log('🔧 Snap Finance Blocks Checkout Handler Loaded:', (window.snap_params && window.snap_params.plugin_version) || 'unknown');
     
     // Get Snap parameters from PHP
     const snapParams = window.snap_params || {};

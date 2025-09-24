@@ -17,6 +17,15 @@
  * License URI: https://finmatch.co.uk/terms-and-conditions/
  */
 
+// Define plugin version once by reading header metadata
+if ( ! defined( 'SNAP_FINANCE_PLUGIN_VERSION' ) ) {
+    if ( ! function_exists( 'get_file_data' ) ) {
+        require_once ABSPATH . 'wp-admin/includes/plugin.php';
+    }
+    $data = function_exists( 'get_file_data' ) ? get_file_data( __FILE__, array( 'Version' => 'Version' ) ) : array();
+    define( 'SNAP_FINANCE_PLUGIN_VERSION', isset( $data['Version'] ) && $data['Version'] ? $data['Version'] : '1.0.0' );
+}
+
 /**
  * Declare HPOS compatibility.
  * This plugin is compatible with WooCommerce's High-Performance Order Storage (HPOS).

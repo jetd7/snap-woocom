@@ -32,7 +32,7 @@ class WC_Snap_Finance_Gateway extends WC_Payment_Gateway {
         
         // Fix icon URL to handle spaces in folder names properly
         $plugin_dir = dirname( __FILE__ );
-        $this->icon = plugins_url('assets/images/snap-logo.svg', dirname(__FILE__)) . '?v=1.0.0';
+        $this->icon = plugins_url('assets/images/snap-logo.svg', dirname(__FILE__)) . '?v=' . ( defined('SNAP_FINANCE_PLUGIN_VERSION') ? SNAP_FINANCE_PLUGIN_VERSION : '1.0.0' );
         
         // Debug icon path
         error_log('SNAP GATEWAY: Icon path set to: ' . $this->icon);
@@ -332,7 +332,7 @@ class WC_Snap_Finance_Gateway extends WC_Payment_Gateway {
             'min_amount'   => self::MIN_AMOUNT,
             'max_amount'   => self::MAX_AMOUNT,
             'is_blocks'    => $is_blocks,
-            'icon'         => plugins_url('assets/images/snap-logo.svg', dirname(__FILE__)) . '?v=1.0.0',
+            'icon'         => plugins_url('assets/images/snap-logo.svg', dirname(__FILE__)) . '?v=' . ( defined('SNAP_FINANCE_PLUGIN_VERSION') ? SNAP_FINANCE_PLUGIN_VERSION : '1.0.0' ),
             // Expose gateway title/description so JS can use Woo settings in both Classic and Blocks
             'gateway_title'       => $this->title,
             'gateway_description' => $this->description,
@@ -358,7 +358,7 @@ class WC_Snap_Finance_Gateway extends WC_Payment_Gateway {
             'snap-payment-detector',
             $base_url . 'assets/js/payment-method-detector.js',
             [], // no deps
-            '2.6.9',
+            ( defined('SNAP_FINANCE_PLUGIN_VERSION') ? SNAP_FINANCE_PLUGIN_VERSION : '1.0.0' ),
             true
         );
         wp_enqueue_script( 'snap-payment-detector' );
@@ -368,7 +368,7 @@ class WC_Snap_Finance_Gateway extends WC_Payment_Gateway {
             'snap-transaction',
             $base_url . 'assets/js/transaction-data.js',
             [], // no deps
-            '2.6.9',
+            ( defined('SNAP_FINANCE_PLUGIN_VERSION') ? SNAP_FINANCE_PLUGIN_VERSION : '1.0.0' ),
             true
         );
         wp_enqueue_script( 'snap-transaction' );
@@ -378,7 +378,7 @@ class WC_Snap_Finance_Gateway extends WC_Payment_Gateway {
             'snap-form-monitor',
             $base_url . 'assets/js/utils/form-monitor-util.js',
             ['snap-payment-detector'], // depends on payment detector
-            '2.6.9',
+            ( defined('SNAP_FINANCE_PLUGIN_VERSION') ? SNAP_FINANCE_PLUGIN_VERSION : '1.0.0' ),
             true
         );
         wp_enqueue_script( 'snap-form-monitor' );
@@ -388,7 +388,7 @@ class WC_Snap_Finance_Gateway extends WC_Payment_Gateway {
             'snap-application',
             $base_url . 'assets/js/snap-application.js',
             ['snap-form-monitor'], // depends on form monitor
-            '2.6.9',
+            ( defined('SNAP_FINANCE_PLUGIN_VERSION') ? SNAP_FINANCE_PLUGIN_VERSION : '1.0.0' ),
             true
         );
         wp_enqueue_script( 'snap-application' );
@@ -400,7 +400,7 @@ class WC_Snap_Finance_Gateway extends WC_Payment_Gateway {
             'snap-render',
             $base_url . 'assets/js/snap-render.js',
             [ 'snap-transaction', 'snap-application', 'snap-form-monitor' ], // depends on modules
-            '2.6',
+            ( defined('SNAP_FINANCE_PLUGIN_VERSION') ? SNAP_FINANCE_PLUGIN_VERSION : '1.0.0' ),
             true
         );
         wp_localize_script( 'snap-render', 'snap_params', $params );
@@ -411,7 +411,7 @@ class WC_Snap_Finance_Gateway extends WC_Payment_Gateway {
             'snap-storage',
             $base_url . 'assets/js/utils/storage.js',
             [],
-            '2.2.0',
+            ( defined('SNAP_FINANCE_PLUGIN_VERSION') ? SNAP_FINANCE_PLUGIN_VERSION : '1.0.0' ),
             true
         );
 
@@ -437,7 +437,7 @@ class WC_Snap_Finance_Gateway extends WC_Payment_Gateway {
                 'snap-blocks',
                 $base_url . 'assets/js/blocks.js',
                 [ 'wp-element', 'wc-blocks-registry', 'wc-settings', 'snap-render', 'snap-payment-detector' ],
-                '2.6.9',
+                ( defined('SNAP_FINANCE_PLUGIN_VERSION') ? SNAP_FINANCE_PLUGIN_VERSION : '1.0.0' ),
                 true
             );
             wp_add_inline_script( 'snap-blocks', 'console.log("[Snap] blocks.js loaded");', 'before' );
@@ -453,7 +453,7 @@ class WC_Snap_Finance_Gateway extends WC_Payment_Gateway {
                 'snap-checkout',
                 $base_url . 'assets/js/checkout.js',
                 [ 'jquery', 'snap-render', 'snap-payment-detector' ],
-                '2.6.9',
+                ( defined('SNAP_FINANCE_PLUGIN_VERSION') ? SNAP_FINANCE_PLUGIN_VERSION : '1.0.0' ),
                 true
             );
             wp_add_inline_script( 'snap-checkout', 'console.log("[Snap] checkout.js loaded");', 'before' );
@@ -981,7 +981,7 @@ if ( class_exists( '\Automattic\WooCommerce\Blocks\Payments\Integrations\Abstrac
                 'wc-snap-finance-blocks',
                 plugin_dir_url( dirname( __FILE__ ) ) . 'assets/js/blocks.js',
                 array( 'wc-blocks-registry', 'wc-settings', 'wp-element', 'wp-html-entities', 'wp-data', 'jquery' ),
-                '2.6',
+                ( defined('SNAP_FINANCE_PLUGIN_VERSION') ? SNAP_FINANCE_PLUGIN_VERSION : '1.0.0' ),
                 true
             );
             
@@ -996,7 +996,7 @@ if ( class_exists( '\Automattic\WooCommerce\Blocks\Payments\Integrations\Abstrac
             $settings = $this->get_settings();
             
             // Fix icon URL to handle spaces in folder names properly
-            $icon_url = plugins_url('assets/images/snap-logo.svg', dirname(__FILE__)) . '?v=2.6.9';
+            $icon_url = plugins_url('assets/images/snap-logo.svg', dirname(__FILE__)) . '?v=' . ( defined('SNAP_FINANCE_PLUGIN_VERSION') ? SNAP_FINANCE_PLUGIN_VERSION : '1.0.0' );
             
             // Debug icon URL
             error_log('SNAP BLOCKS: Icon URL: ' . $icon_url);

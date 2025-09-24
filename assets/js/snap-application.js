@@ -1,6 +1,6 @@
 (function () {
   'use strict';
-  console.log('🔧 SnapApplication Loaded (v1.0.0)');
+console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_params.plugin_version) || 'unknown');
 
   // Application status tracking
   let applicationStatus = 'none'; // 'none', 'pending', 'approved', 'denied', 'error'
