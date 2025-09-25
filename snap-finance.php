@@ -656,7 +656,24 @@ if ( ! function_exists( 'snap_rest_attach_cb' ) ) {
                 $order_id = snap_find_blocks_draft_order_id( null );
             }
             if ( ! $order_id ) {
-                return new WP_REST_Response( array( 'ok' => false, 'reason' => 'no_order_found' ), 200 );
+            // Pragmatic fallback: reuse latest recent Snap order even if terminal (failed/cancelled)
+            // Do NOT upshift status here; just attach meta so finalize can find it later
+            $fallback = wc_get_orders( array(
+                'limit'      => 1,
+                'return'     => 'ids',
+                'meta_key'   => '_payment_method',
+                'meta_value' => 'snapfinance_refined',
+                'orderby'    => 'date',
+                'order'      => 'DESC',
+                'status'     => array( 'failed', 'cancelled', 'pending', 'on-hold', 'processing' ),
+            ) );
+            if ( ! empty( $fallback ) ) {
+                $order_id = (int) $fallback[0];
+                try { snap_orders_log( 'attach_fallback_recent', array( 'source' => 'rest', 'order_id' => (string) $order_id, 'application_id' => $app_id ) ); } catch ( Throwable $e ) {}
+            }
+        }
+        if ( ! $order_id ) {
+            return new WP_REST_Response( array( 'ok' => false, 'reason' => 'no_order_found' ), 200 );
             }
 
             $order = wc_get_order( $order_id );
@@ -854,11 +871,12 @@ function snap_rest_funded_cb( WP_REST_Request $request ) {
             ), 200 );
         }
 
-        // Fallback: try to bind to the latest Blocks checkout-draft order (no creation)
+        // Fallback B: try latest draft order
         $draft_id = snap_find_blocks_draft_order_id( null );
         if ( $draft_id > 0 ) {
             $order = wc_get_order( (int) $draft_id );
             if ( $order ) {
+                try { snap_orders_log( 'funded_fallback_draft', array( 'source' => 'rest', 'order_id' => (string) $draft_id, 'application_id' => $app_id ) ); } catch ( Throwable $e ) {}
                 // Ensure payment method and meta are set, then apply progress
                 $order->set_payment_method( 'snapfinance_refined' );
                 $order->set_payment_method_title( 'Snap Finance' );
@@ -880,7 +898,41 @@ function snap_rest_funded_cb( WP_REST_Request $request ) {
             }
         }
 
-        // Never create a new order here; if we can't find one, tell the client to retry/attach
+        // Fallback C: attach to most recent Snap order (any non-terminal or terminal). Do not upshift here.
+        $recent = wc_get_orders( array(
+            'limit'      => 1,
+            'return'     => 'objects',
+            'orderby'    => 'date',
+            'order'      => 'DESC',
+            'meta_key'   => '_payment_method',
+            'meta_value' => 'snapfinance_refined',
+            'status'     => array( 'pending', 'on-hold', 'processing', 'failed', 'cancelled' ),
+        ) );
+        if ( ! empty( $recent ) ) {
+            $order = $recent[0];
+            try { snap_orders_log( 'funded_fallback_recent', array( 'source' => 'rest', 'order_id' => (string) $order->get_id(), 'application_id' => $app_id ) ); } catch ( Throwable $e ) {}
+            $order->update_meta_data( '_snap_application_id', $app_id );
+            if ( ! empty( $invoice_number ) ) { $order->update_meta_data( '_snap_invoice_number', (string) $invoice_number ); }
+            $order->save();
+            // Apply progress respecting terminal guard
+            if ( in_array( $order->get_status(), array( 'failed', 'cancelled' ), true ) && (int) $progress !== 0 && (int) $progress !== 30 ) {
+                $order->update_meta_data( '_snap_progress_status', (int) $progress );
+                $order->save();
+            } else {
+                snap_apply_progress_to_order( $order, (int) $progress, [ 'application_id' => $app_id, 'invoice_number' => (string) $invoice_number ] );
+            }
+            if ( function_exists( 'WC' ) && WC()->cart ) { WC()->cart->empty_cart( false ); }
+            snap_clear_wc_session_after_finalize();
+            return new WP_REST_Response( array(
+                'success'            => true,
+                'order_id'           => $order->get_id(),
+                'order_received_url' => $order->get_checkout_order_received_url(),
+                'progress_status'    => (int) $progress,
+                'status_payload'     => $body,
+            ), 200 );
+        }
+
+        // If we can't find anything, tell the client to retry/attach
         return new WP_REST_Response( array( 'success' => false, 'error' => 'order_not_seeded' ), 409 );
     }
 }

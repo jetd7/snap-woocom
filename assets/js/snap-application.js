@@ -132,6 +132,13 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
           console.log('[Snap] finalize skipped: already finalized');
           return true;
         }
+        // Optional: token freshness pre-check (lightweight)
+        try {
+          const app = this.getApp() || {};
+          if (app && typeof app.lastUpdatedAt === 'number' && Date.now() - app.lastUpdatedAt > 5 * 60 * 1000) {
+            await this.logServerStatus(applicationId, token, 'preFinalizeRefresh');
+          }
+        } catch(_) {}
         const url = (window.snap_params?.rest_url) || '/wp-json/snap/v1/funded';
         const res = await fetch(url, {
           method: 'POST',
@@ -187,7 +194,8 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
     getApp() { try { return window.SnapStorage?.get?.('application'); } catch(_) { return null; } },
     clearApp() { try { window.SnapStorage?.remove?.('application'); } catch(_) {} },
     // === Snap session persistence util (minimal) ===
-    async saveSnapApp(applicationId, token) {
+    async saveSnapApp(applicationId, token, opts = {}) {
+      const quiet = !!opts.quiet;
       try {
         localStorage.setItem('snap_application_id', applicationId);
         localStorage.setItem('snap_token', token);
@@ -206,15 +214,33 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
           body: params.toString()
         });
         const text = await res.text();
-        if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}: ${text}`);
+        if (!res.ok) {
+          // Quietly ignore expected invalid/expired token during rehydrate
+          if (quiet) {
+            try {
+              const j = JSON.parse(text);
+              const code = (j && j.data && j.data.code) || res.status;
+              if (code === 401 || (j && j.data && /invalid token/i.test(JSON.stringify(j.data)))) {
+                return { ok: false, status: code };
+              }
+            } catch(_) {}
+          }
+          throw new Error(`HTTP ${res.status} ${res.statusText}: ${text}`);
+        }
         let json = {};
         try { json = JSON.parse(text); } catch (_) {}
         if (!json.success) throw new Error(`Server unsuccessful: ${text}`);
         console.debug('[Snap] save_snap_application OK');
         return json;
       } catch (e) {
-        console.error('[Snap] save_snap_application failed:', e);
-        throw e;
+        if (quiet) {
+          // Downgrade noise for expected rehydrate failures
+          try { console.debug('[Snap] save_snap_application (quiet) failed'); } catch(_) {}
+          return { ok: false };
+        } else {
+          console.error('[Snap] save_snap_application failed:', e);
+          throw e;
+        }
       }
     },
 
@@ -239,7 +265,7 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
       try {
         const id = localStorage.getItem('snap_application_id');
         const tk = localStorage.getItem('snap_token');
-        if (id && tk) this.saveSnapApp(id, tk).catch(()=>{});
+        if (id && tk) this.saveSnapApp(id, tk, { quiet: true }).catch(()=>{});
       } catch(_) {}
     },
     onApplicationId(appId, token, snapParams, invoiceNumber) {

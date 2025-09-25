@@ -4,6 +4,9 @@
 - Code Cleanup: Removed deprecated `snap_seed_order` and duplicate class-based `handle_save_snap_application` to reduce redundancy.
 - Audit Improvements: `/attach` now appends to `_snap_application_ids` while keeping the latest `_snap_application_id` for lookups.
 - Robustness: Standardized localStorage keys to snake_case (`snap_application_id`, `snap_token`, `snap_application_status`, `snap_finance_approved`) and aligned Classic returning-customer detection.
+- Finalize Robustness: Enhanced order resolution in `/attach` and `/funded` with pragmatic fallbacks (latest draft or most recent Snap order). Terminal guard preserved; no order creation in finalize.
+- Observability: Added concise logs for fallback paths (`attach_fallback_recent`, `funded_fallback_draft`, `funded_fallback_recent`) to aid diagnostics without noise.
+- Token Handling: Quiet rehydrate for expected 401s, plus a light pre-finalize token freshness check (status poll) to reduce `/funded` 401s.
 # Snap Finance WooCommerce Plugin v1.0.0
 
 A WordPress plugin that integrates Snap Finance UK's payment gateway with WooCommerce, allowing customers to apply for finance during checkout.
