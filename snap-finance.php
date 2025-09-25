@@ -3,7 +3,7 @@
  * Plugin Name: Snap Finance Payment Gateway
  * Plugin URI:  https://finmatch.co.uk
  * Description: Allow customers to apply for finance through Snap Finance UK (Classic & Blocks).
- * Version:     1.0.1
+ * Version:     1.0.2
  * Author:      FinMatch
  * Author URI:  https://finmatch.co.uk
  * Text Domain: snap-finance-gateway
@@ -23,7 +23,7 @@ if ( ! defined( 'SNAP_FINANCE_PLUGIN_VERSION' ) ) {
         require_once ABSPATH . 'wp-admin/includes/plugin.php';
     }
     $data = function_exists( 'get_file_data' ) ? get_file_data( __FILE__, array( 'Version' => 'Version' ) ) : array();
-    define( 'SNAP_FINANCE_PLUGIN_VERSION', isset( $data['Version'] ) && $data['Version'] ? $data['Version'] : '1.0.1' );
+    define( 'SNAP_FINANCE_PLUGIN_VERSION', isset( $data['Version'] ) && $data['Version'] ? $data['Version'] : '1.0.2' );
 }
 
 /**
@@ -410,8 +410,7 @@ if ( ! function_exists( 'snap_apply_progress_to_order' ) ) {
                 snap_add_note( $order, 'Application requires additional documents.' );
                 break;
 
-            case 26: // PENDING_DEL (signed; awaiting delivery) → pending + delivery/payout note
-                if ( 'pending' !== $order->get_status() ) { $order->update_status( 'pending' ); }
+            case 26: // PENDING_DEL (signed; awaiting delivery) → note only; no status change
                 snap_add_note( $order, 'Customer signed; awaiting merchant delivery. Once the customer has received goods/service please confirm in your Snap Merchant Portal for next day payment.' );
                 break;
 
@@ -689,11 +688,7 @@ if ( ! function_exists( 'snap_rest_attach_cb' ) ) {
             $app_ids[] = $app_id;
             $order->update_meta_data( '_snap_application_ids', array_values( array_unique( $app_ids ) ) );
             $order->update_meta_data( '_snap_application_id', $app_id );
-            // Only move checkout-draft → pending; never overwrite failed/cancelled/processing/etc.
-            $current_status = $order->get_status();
-            if ( $current_status === 'checkout-draft' ) {
-                $order->set_status( 'pending' );
-            }
+            // Do not promote draft to pending on attach; status changes only on funded/complete
             $order->add_order_note( sprintf( 'Snap application started (App %s).', $app_id ) );
             $order->save();
 
@@ -748,11 +743,13 @@ function snap_rest_funded_cb( WP_REST_Request $request ) {
         'timeout' => 20,
     ) );
     if ( is_wp_error( $resp ) ) {
+        try { snap_orders_log( 'funded_fetch_failed', array( 'source' => 'rest', 'application_id' => $app_id, 'note' => 'HTTP error: ' . $resp->get_error_message() ) ); } catch ( Throwable $e ) {}
         return new WP_REST_Response( array( 'success' => false, 'error' => 'snap_status_http', 'details' => $resp->get_error_message() ), 502 );
     }
         $code     = (int) wp_remote_retrieve_response_code( $resp );
         $body     = json_decode( wp_remote_retrieve_body( $resp ), true );
     if ( $code !== 200 || ! is_array( $body ) || ! isset( $body['progressStatus'] ) ) {
+        try { snap_orders_log( 'funded_fetch_failed', array( 'source' => 'rest', 'application_id' => $app_id, 'note' => 'Bad response', 'progress' => '' ) ); } catch ( Throwable $e ) {}
         return new WP_REST_Response( array( 'success' => false, 'error' => 'snap_status_bad_response', 'http' => $code, 'body' => $body ), 502 );
     }
         $progress  = (int) $body['progressStatus'];
@@ -771,18 +768,19 @@ function snap_rest_funded_cb( WP_REST_Request $request ) {
         if ( $seeded_order ) {
             try { snap_orders_log( 'funded_start', array( 'source' => 'api', 'order_id' => (string) $seeded_order->get_id(), 'application_id' => $app_id, 'progress' => (string) $progress, 'wc_status' => $seeded_order->get_status(), 'method' => $seeded_order->get_payment_method() ) ); } catch ( Throwable $e ) {}
                 // If this order is already paid, return success (no duplicate actions)
-                if ( $seeded_order->is_paid() || $seeded_order->get_transaction_id() ) {
+        if ( $seeded_order->is_paid() || $seeded_order->get_transaction_id() ) {
                     if ( ! empty( $invoice_number ) ) { $seeded_order->update_meta_data( '_snap_invoice_number', (string) $invoice_number ); }
                     $seeded_order->update_meta_data( '_snap_progress_status', (int) $progress );
                     $seeded_order->save();
                 try { wc_get_logger()->info( sprintf( 'Snap funded done (idempotent): order#%d status=%s method=%s', $seeded_order->get_id(), $seeded_order->get_status(), $seeded_order->get_payment_method() ), array( 'source' => 'snap' ) ); } catch ( Throwable $e ) {}
                 return new WP_REST_Response( array(
-                        'success'            => true,
-                        'idempotent'         => true,
-                        'order_id'           => $seeded_order->get_id(),
-                        'order_received_url' => $seeded_order->get_checkout_order_received_url(),
+                    'success'            => true,
+                    'idempotent'         => true,
+                    'order_id'           => $seeded_order->get_id(),
                     'progress_status'    => (int) $progress,
                     'status_payload'     => $body,
+                    // Only expose order_received_url when funded/complete or marked paid
+                'order_received_url' => ( in_array( (int) $progress, array( 26, 0, 30 ), true ) ) ? $seeded_order->get_checkout_order_received_url() : null,
                     ), 200 );
                 }
 
@@ -792,17 +790,21 @@ function snap_rest_funded_cb( WP_REST_Request $request ) {
                     $seeded_order->update_meta_data( '_snap_progress_status', (int) $progress );
                     $seeded_order->save();
                 } else {
-                    snap_apply_progress_to_order( $seeded_order, (int) $progress, [ 'application_id' => $app_id, 'invoice_number' => (string) $invoice_number ] );
+                snap_apply_progress_to_order( $seeded_order, (int) $progress, [ 'application_id' => $app_id, 'invoice_number' => (string) $invoice_number ] );
                 }
                 if ( function_exists( 'WC' ) && WC()->cart ) { WC()->cart->empty_cart( false ); }
                 snap_clear_wc_session_after_finalize();
                 try { snap_orders_log( 'funded_done', array( 'source' => 'rest', 'order_id' => (string) $seeded_order->get_id(), 'application_id' => $app_id, 'progress' => (string) $progress, 'wc_status' => $seeded_order->get_status(), 'method' => $seeded_order->get_payment_method() ) ); } catch ( Throwable $e ) {}
-                return new WP_REST_Response( array(
+                $resp_arr = array(
                     'success'            => true,
                     'order_id'           => $seeded_order->get_id(),
-                    'order_received_url' => $seeded_order->get_checkout_order_received_url(),
                     'progress_status'    => (int) $progress,
-                ), 200 );
+                'order_received_url' => ( in_array( (int) $progress, array( 26, 0, 30 ), true ) ) ? $seeded_order->get_checkout_order_received_url() : null,
+                );
+                if ( empty( $resp_arr['order_received_url'] ) ) {
+                    try { snap_orders_log( 'funded_no_redirect', array( 'source' => 'rest', 'order_id' => (string) $seeded_order->get_id(), 'application_id' => $app_id, 'progress' => (string) $progress, 'note' => 'Non-funded; no redirect' ) ); } catch ( Throwable $e ) {}
+                }
+                return new WP_REST_Response( $resp_arr, 200 );
             }
         }
 
@@ -820,14 +822,18 @@ function snap_rest_funded_cb( WP_REST_Request $request ) {
             ) );
             if ( ! empty( $existing ) ) {
                 $order = $existing[0];
-                return new WP_REST_Response( array(
+                $resp_arr = array(
                     'success'            => true,
                     'idempotent'         => true,
                     'order_id'           => $order->get_id(),
-                    'order_received_url' => $order->get_checkout_order_received_url(),
                     'progress_status'    => (int) $progress,
                     'status_payload'     => $body,
-                ), 200 );
+                    'order_received_url' => ( in_array( (int) $progress, array( 26, 0, 30 ), true ) ) ? $order->get_checkout_order_received_url() : null,
+                );
+                if ( empty( $resp_arr['order_received_url'] ) ) {
+                    try { snap_orders_log( 'funded_no_redirect', array( 'source' => 'rest', 'order_id' => (string) $order->get_id(), 'application_id' => $app_id, 'progress' => (string) $progress, 'note' => 'Non-funded; no redirect' ) ); } catch ( Throwable $e ) {}
+                }
+                return new WP_REST_Response( $resp_arr, 200 );
             }
         }
         set_transient( $lock_key, 1, 60 );
@@ -865,7 +871,7 @@ function snap_rest_funded_cb( WP_REST_Request $request ) {
             return new WP_REST_Response( array(
                 'success'            => true,
                 'order_id'           => $order->get_id(),
-                'order_received_url' => $order->get_checkout_order_received_url(),
+                'order_received_url' => ( in_array( (int) $progress, array( 26, 0, 30 ), true ) ) ? $order->get_checkout_order_received_url() : null,
                 'progress_status'    => (int) $progress,
                 'status_payload'     => $body,
             ), 200 );
@@ -888,49 +894,21 @@ function snap_rest_funded_cb( WP_REST_Request $request ) {
                 if ( function_exists( 'WC' ) && WC()->cart ) { WC()->cart->empty_cart( false ); }
                 snap_clear_wc_session_after_finalize();
                 try { snap_orders_log( 'funded_done', array( 'source' => 'rest', 'order_id' => (string) $order->get_id(), 'application_id' => $app_id, 'progress' => (string) $progress, 'wc_status' => $order->get_status(), 'method' => $order->get_payment_method() ) ); } catch ( Throwable $e ) {}
-                return new WP_REST_Response( array(
+                $resp_arr = array(
                     'success'            => true,
                     'order_id'           => $order->get_id(),
-                    'order_received_url' => $order->get_checkout_order_received_url(),
                     'progress_status'    => (int) $progress,
                     'status_payload'     => $body,
-                ), 200 );
+                    'order_received_url' => ( in_array( (int) $progress, array( 26, 0, 30 ), true ) ) ? $order->get_checkout_order_received_url() : null,
+                );
+                if ( empty( $resp_arr['order_received_url'] ) ) {
+                    try { snap_orders_log( 'funded_no_redirect', array( 'source' => 'rest', 'order_id' => (string) $order->get_id(), 'application_id' => $app_id, 'progress' => (string) $progress, 'note' => 'Non-funded; no redirect' ) ); } catch ( Throwable $e ) {}
+                }
+                return new WP_REST_Response( $resp_arr, 200 );
             }
         }
 
-        // Fallback C: attach to most recent Snap order (any non-terminal or terminal). Do not upshift here.
-        $recent = wc_get_orders( array(
-            'limit'      => 1,
-            'return'     => 'objects',
-            'orderby'    => 'date',
-            'order'      => 'DESC',
-            'meta_key'   => '_payment_method',
-            'meta_value' => 'snapfinance_refined',
-            'status'     => array( 'pending', 'on-hold', 'processing', 'failed', 'cancelled' ),
-        ) );
-        if ( ! empty( $recent ) ) {
-            $order = $recent[0];
-            try { snap_orders_log( 'funded_fallback_recent', array( 'source' => 'rest', 'order_id' => (string) $order->get_id(), 'application_id' => $app_id ) ); } catch ( Throwable $e ) {}
-            $order->update_meta_data( '_snap_application_id', $app_id );
-            if ( ! empty( $invoice_number ) ) { $order->update_meta_data( '_snap_invoice_number', (string) $invoice_number ); }
-            $order->save();
-            // Apply progress respecting terminal guard
-            if ( in_array( $order->get_status(), array( 'failed', 'cancelled' ), true ) && (int) $progress !== 0 && (int) $progress !== 30 ) {
-                $order->update_meta_data( '_snap_progress_status', (int) $progress );
-                $order->save();
-            } else {
-                snap_apply_progress_to_order( $order, (int) $progress, [ 'application_id' => $app_id, 'invoice_number' => (string) $invoice_number ] );
-            }
-            if ( function_exists( 'WC' ) && WC()->cart ) { WC()->cart->empty_cart( false ); }
-            snap_clear_wc_session_after_finalize();
-            return new WP_REST_Response( array(
-                'success'            => true,
-                'order_id'           => $order->get_id(),
-                'order_received_url' => $order->get_checkout_order_received_url(),
-                'progress_status'    => (int) $progress,
-                'status_payload'     => $body,
-            ), 200 );
-        }
+        // Fallback C removed to prevent cross-session order reuse; require session/draft/app match
 
         // If we can't find anything, tell the client to retry/attach
         return new WP_REST_Response( array( 'success' => false, 'error' => 'order_not_seeded' ), 409 );

@@ -443,11 +443,8 @@ console.log('🔧 Snap Finance Blocks Checkout Handler Loaded:', (window.snap_pa
                         }
                     }, 100);
                 } else {
-                    console.log('❌ Validation failed - updating validation message');
-                    // Update validation message if SnapRender has the function
-                    if (window.SnapRender && window.SnapRender.showValidationMessage) {
-                        window.SnapRender.showValidationMessage(container, validationMessages, transaction);
-                    }
+                    console.log('❌ Validation failed - letting SnapRender manage messaging');
+                    // Avoid duplicate validation messages; SnapRender manages overlay/messages internally
                 }
             }
         });

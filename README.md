@@ -1,4 +1,75 @@
+## 1.0.2
+
+- Security: Thank‑you redirect is now gated server‑side. `/funded` only returns `order_received_url` when progress is FUNDED (0) or COMPLETE (30), or the order is already paid. Client redirects only when that URL is present.
+- Client Guard: Removed UI fallback submission when finalize isn’t ready; checkout remains blocked with an inline message until funding completes.
+- Order Resolution: Removed “recent Snap order” fallback from `/funded` to prevent cross‑session reuse. Resolution now relies on session `order_awaiting_payment`, explicit `order_key`, and the signed cookie.
+- Attach Behavior: No more draft→pending promotion in `/attach`. Status changes happen only on FUNDED/COMPLETE.
+- Progress 26 Handling: Note‑only (awaiting delivery); no status change.
+- Observability: Added `funded_fetch_failed` and `funded_no_redirect` events to Woo logs for clear diagnostics.
+- Version: Bumped to 1.0.2; assets use the version for cache‑busting.
+
 ## 0.5
+
+## Architecture Overview
+
+- Snap is a standard WooCommerce payment gateway with an eligibility/signing flow.
+- Orders are created by WooCommerce; the plugin does not create new orders during finalize.
+- Application IDs are attached to the current checkout order (latest in `_snap_application_id`, history in `_snap_application_ids`).
+- Finalization is server-authenticated: the server calls Snap Status API and only returns a thank‑you URL for signed/complete states.
+
+### Checkout Flow (Classic & Blocks)
+- Customer selects Snap → clicks “Check eligibility” (opens Snap popup).
+- Pre‑sign (approved/pending/docs): checkout remains blocked; inline messages guide the user.
+- Signed (progress 26): server returns thank‑you URL; redirect to order confirmation; order is not marked paid; signed note added.
+- Funded/Complete (progress 0/30): order is marked paid/complete; redirect to order confirmation.
+- Declined/withdrawn/error: checkout remains blocked with clear messaging; merchant can switch methods.
+
+### Endpoints and Security
+- SDK URL (auto‑selects by Test mode):
+  - Sandbox: `https://sandbox-sdk.snapfinance.co.uk/v1/snapuk.min.js`
+  - Production: `https://sdk.snapfinance.co.uk/v1/snapuk.min.js`
+- REST
+  - `POST /wp-json/snap/v1/attach` — binds latest applicationId to the current draft order (no status promotion).
+  - `POST /wp-json/snap/v1/funded` — calls Snap Status API; returns thank‑you URL only for progress 26/0/30.
+  - `GET /wp-json/snap/v1/status` — server‑verified application status.
+  - `POST /wp-json/snap/v1/journey` — optional stage logging (idempotent per stage).
+- Security guards
+  - REST nonces required for attach/funded/status/journey.
+  - Finalize redirects only for progress ∈ {26, 0, 30}. Client does not fallback‑submit when not ready.
+  - No recent‑order fallback (prevents cross‑session reuses). Resolution is session/order_key/cookie scoped.
+
+### Status Mapping (Server)
+
+| Code | Meaning                   | Order status change          | Order note                                                                                                      | Redirect? |
+|------|---------------------------|------------------------------|------------------------------------------------------------------------------------------------------------------|-----------|
+| 2    | PENDING                   | processing                   | Application pending. Awaiting decision.                                                                          | No        |
+| 6    | APPROVED (pre‑sign)       | processing                   | Application approved. Awaiting customer actions.                                                                  | No        |
+| 10   | APPROVED_WITH_CONDITIONS  | processing                   | Application approved with conditions.                                                                             | No        |
+| 14   | DENIED                    | failed                       | Customer was declined by Snap. Try another lender or payment method. Customer can apply again in 30 days.        | No        |
+| 18   | WITHDRAWN                 | cancelled                    | Application withdrawn by customer.                                                                                | No        |
+| 22   | PENDING_DOCS              | processing                   | Application requires additional documents.                                                                        | No        |
+| 26   | PENDING_DEL (signed)      | no change                    | Customer signed; awaiting merchant delivery. Confirm in Snap Merchant Portal for next day payment.               | Yes       |
+| 30   | COMPLETE                  | completed (and paid)         | Snap lifecycle complete.                                                                                          | Yes       |
+| -1   | ERROR/UNKNOWN             | on‑hold                      | Snap returned an error or unknown status. Manual check required.                                                  | No        |
+| 0    | FUNDED                    | paid (ensure processing)     | Funded. Payment complete.                                                                                         | Yes       |
+
+### Logs
+- Unified CSV‑style Woo logs (source `snap`) include: `order_created`, `attach_ok`, `funded_start/done`, `journey`, `status_polled/ok`.
+- Additional hardening events:
+  - `funded_fetch_failed` — status fetch failed; finalize aborted.
+  - `funded_no_redirect` — non‑funded state; no thank‑you URL returned.
+
+### Versioning and Cache Busting
+- All enqueued assets include `SNAP_FINANCE_PLUGIN_VERSION` as a query param.
+- Bump the plugin header version to force cache refresh after releases.
+
+### Testing Checklist
+- Toggle Test mode: confirm SDK host switches (sandbox/prod).
+- Declined flow blocks checkout and logs notes.
+- Pre‑sign approved keeps checkout blocked; no redirect.
+- Signed (26) redirects; note added; no status change.
+- Funded/Complete (0/30) marks paid/complete; redirects.
+- Hammer “Place order” cannot produce a thank‑you page unless signed/funded/complete.
 
 - Security Hardening: Added nonce verification to wc-ajax `snap_save_application_cb`; removed insecure finalize AJAX (`ajax_mark_funded`) and consolidated on secured REST `/snap/v1/funded`.
 - Code Cleanup: Removed deprecated `snap_seed_order` and duplicate class-based `handle_save_snap_application` to reduce redundancy.

@@ -162,7 +162,9 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
           window.location.assign(data.order_received_url);
           return true;
         }
-        console.error('[Snap] finalize order failed', data);
+        console.warn('[Snap] finalize order not ready; keeping checkout blocked', data);
+        try { this.blockCheckoutSubmission(); } catch(_) {}
+        try { this.showInlineMessage('Application not complete yet—please finish in the Snap popup.', 'warning'); } catch(_) {}
         return false;
       } catch (e) {
         console.error('[Snap] finalize order exception', e);
@@ -372,18 +374,9 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
           const invoiceNum = (window.SnapTransaction && typeof window.SnapTransaction.getLastInvoiceNumber === 'function' ? window.SnapTransaction.getLastInvoiceNumber() : null) || (snapParams && snapParams.transaction ? snapParams.transaction.invoiceNumber : null) || null;
           const ok = await this.finalizeSnapOrderInBackground({ applicationId: appId, token, invoice_number: invoiceNum, progress_status: 0 });
           if (!ok) {
-            console.warn('REST finalize failed; falling back to UI submission');
-            // Only now unblock submission and trigger UI fallback
-            this.allowCheckoutSubmission();
-            try { window.wp?.data?.dispatch?.('wc/store/payment')?.setActivePaymentMethod?.('snapfinance_refined'); } catch (_) {}
-            const form = document.querySelector('form.checkout');
-            if (form) { try { form.submit(); } catch(e) { console.error('Classic submit failed', e); } }
-            else {
-              try {
-                const d = window.wp?.data?.dispatch?.('wc/store/checkout');
-                if (typeof d?.submitOrder === 'function') { await d.submitOrder(); }
-              } catch(e) { console.error('Blocks submit fallback failed', e); }
-            }
+            console.warn('Finalize not ready; keeping checkout blocked');
+            try { this.blockCheckoutSubmission(); } catch(_) {}
+            try { this.showInlineMessage('Application not complete yet—please finish in the Snap popup.', 'warning'); } catch(_) {}
           }
         }
       } catch (e) { console.error(e); }
@@ -551,15 +544,9 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
           const invoiceNum = (window.SnapTransaction && typeof window.SnapTransaction.getLastInvoiceNumber === 'function' ? window.SnapTransaction.getLastInvoiceNumber() : null) || (snapParams && snapParams.transaction ? snapParams.transaction.invoiceNumber : null) || null;
           const ok = await this.finalizeSnapOrderInBackground({ applicationId: app?.id || app?.applicationId, token: app?.token, invoice_number: invoiceNum, progress_status: 0 });
           if (!ok) {
-            console.warn('REST finalize failed (return journey); falling back to UI submission');
-            const form = document.querySelector('form.checkout');
-            if (form) { try { form.submit(); } catch(e) { console.error('Classic submit failed', e); } }
-            else {
-              try {
-                const d = window.wp?.data?.dispatch?.('wc/store/checkout');
-                if (typeof d?.submitOrder === 'function') { await d.submitOrder(); }
-              } catch(e) { console.error('Blocks submit fallback failed', e); }
-            }
+            console.warn('Finalize not ready (return journey); keeping checkout blocked');
+            try { this.blockCheckoutSubmission(); } catch(_) {}
+            try { this.showInlineMessage('Application not complete yet—please finish in the Snap popup.', 'warning'); } catch(_) {}
           }
         } catch(_) {}
       } catch(_) {}
