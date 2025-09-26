@@ -90,6 +90,18 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
               if (stage === 'denied') {
                 try { window.SnapApplication?.onDenied?.(appId, token); } catch(_) {}
               }
+              // Success hint from portal: proactively trigger onSuccess once (only final stage)
+              if (!window.__snapUrlSuccessFired && stage === 'you-have-done-it') {
+                window.__snapUrlSuccessFired = true;
+                try {
+                  console.log('💡 URL success hint detected → triggering onSuccess flow');
+                  if (typeof triggerSuccessFn === 'function') {
+                    triggerSuccessFn(appId, token);
+                  } else if (window.SnapApplication && typeof window.SnapApplication.onSuccess === 'function') {
+                    window.SnapApplication.onSuccess(appId, token);
+                  }
+                } catch (e) { console.warn('URL success trigger failed (non-fatal)', e); }
+              }
             }
           }
         } catch(e) { console.warn('URL watcher error (ignored)', e); }

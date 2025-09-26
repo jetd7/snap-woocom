@@ -1,4 +1,4 @@
-## Snap Finance WooCommerce Plugin (v1.0.4)
+## Snap Finance WooCommerce Plugin (v1.0.5)
 
 Production-ready Snap Finance UK gateway for WooCommerce (Classic & Blocks). Designed for clarity, security, and a clean user journey.
 
