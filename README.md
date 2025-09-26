@@ -8,7 +8,7 @@ Production-ready Snap Finance UK gateway for WooCommerce (Classic & Blocks). Des
 ### How it works
 - Checkout shows a Snap button. Customer applies/signs in the Snap popup.
 - The plugin attaches the `application_id` to the current checkout order.
-- Server‑verified finalize: the server calls Snap Status API and returns a thank‑you URL only for signed/funded/complete.
+- Server‑verified finalise: the server calls Snap Status API and returns a thank‑you URL only for signed/funded/complete.
 - After thank‑you, client and server clear Snap state so the application cannot be reused (single‑use).
 
 ### Endpoints
@@ -20,7 +20,7 @@ Production-ready Snap Finance UK gateway for WooCommerce (Classic & Blocks). Des
 
 | Code | Meaning | Order status change | Order note | Redirect? | Customer experience |
 |---|---|---|---|---|---|
-| 2 | PENDING | processing | Application pending. Awaiting decision. | No | Stays on checkout; popup continues; inline warning if finalize attempted |
+| 2 | PENDING | processing | Application pending. Awaiting decision. | No | Stays on checkout; popup continues; inline warning if finalise attempted |
 | 6 | APPROVED (pre‑sign) | processing | Application approved. Awaiting customer actions. | No | Stays on checkout; must finish signing |
 | 10 | APPROVED_WITH_CONDITIONS | processing | Application approved with conditions. | No | Stays on checkout; satisfy conditions/sign |
 | 14 | DENIED | failed | Customer was declined by Snap. Try another lender or payment method. Customer can apply again in 30 days. | No | Blocked; choose another method |
@@ -32,12 +32,41 @@ Production-ready Snap Finance UK gateway for WooCommerce (Classic & Blocks). Des
 | 0 | FUNDED | paid (ensure processing) | Funded. Payment complete. | Yes | Redirect to order confirmation; order marked paid |
 
 ### Security & hardening
-- REST nonces required; no unauthenticated finalize. No order creation during finalize.
-- Redirects only for 26/0/30; UI never fallbacks to submit if finalize is not ready.
-- Post‑finalize cleanup clears session/cookie/client storage to prevent reuse.
+- REST nonces required; no unauthenticated finalise. No order creation during finalise.
+- Redirects only for 26/0/30; UI never fallbacks to submit if finalise is not ready.
+- Post‑finalise cleanup clears session/cookie/client storage to prevent reuse.
 
 ### Logging (concise)
 - Woo log source `snap`: `order_created`, `attach_ok`, `status_ok/polled`, `funded_start/done`, `funded_no_redirect`, `funded_fetch_failed`, `journey`.
+
+#### What we log (source: `snap`)
+
+| Event | When it occurs | Key fields |
+|---|---|---|
+| order_created | On Woo order creation | order_id, wc_status, method |
+| attach_ok | App ID attached to draft order | order_id, application_id, invoice_number, wc_status, method |
+| status_ok / status_polled | Server status check succeeded | application_id, progress |
+| funded_start | Finalize started for an order | order_id, application_id, progress, wc_status, method |
+| funded_done | Finalize applied to order | order_id, application_id, progress, wc_status, method |
+| funded_no_redirect | Non‑funded state → no thank‑you URL | order_id, application_id, progress, note |
+| funded_fetch_failed | Status API error | application_id, note |
+| journey | Snap journey stage observed | order_id, application_id, stage |
+
+Notes:
+- Timestamps are provided by WooCommerce logs automatically.
+- Tokens are never logged. Application IDs and order IDs are included for traceability.
+
+#### Example lines (CSV‑style)
+
+```
+12345,order_created,hook,, , ,pending,snapfinance_refined,,
+12345,attach_ok,rest,APP-ABC,INV-123,,pending,snapfinance_refined,,
+,status_ok,api,APP-ABC,,26,,,,
+12345,funded_start,api,APP-ABC,,26,processing,snapfinance_refined,,
+12345,funded_no_redirect,rest,APP-ABC,,26,processing,snapfinance_refined,,Non-funded; no redirect
+12345,funded_done,rest,APP-ABC,,0,processing,snapfinance_refined,,
+12345,journey,url,APP-ABC,, , , ,pay-and-sign/deposit-payment,
+```
 
 ### Setup
 1) Upload and activate the plugin. 2) Configure credentials (Sandbox/Production). 3) Enable the gateway.
@@ -80,12 +109,12 @@ This plugin writes high‑signal, token‑safe diagnostics on both frontend and 
 
 | Source | Where to view | What it captures | PII/Security | Typical use |
 |---|---|---|---|---|
-| WooCommerce log: `snap` | WooCommerce → Status → Logs (select `snap`) | Server Status API replies (progressStatus), funded flow start/done, ATTACH outcomes, journey posts, idempotent finalizations, fallback to draft order | No bearer tokens; includes application_id, order_id, invoice_number | Trace application lifecycle; verify status mapping; ensure no duplicate orders; see which order finalized |
+| WooCommerce log: `snap` | WooCommerce → Status → Logs (select `snap`) | Server Status API replies (progressStatus), funded flow start/done, ATTACH outcomes, journey posts, idempotent finalisations, fallback to draft order | No bearer tokens; includes application_id, order_id, invoice_number | Trace application lifecycle; verify status mapping; ensure no duplicate orders; see which order finalised |
 | WooCommerce log: `snap-finance` | WooCommerce → Status → Logs (select `snap-finance`) | Global order creation hook (“Order created #id (status, method)”) | No tokens | Detect unexpected order creation; correlate with attach/funded logs |
-| WooCommerce log: `snap-debug` | WooCommerce → Status → Logs (select `snap-debug`) | Draft recovery warnings (e.g., total mismatches), attach/funded edge cases | No tokens | Investigate recovery logic and edge conditions |
+| WooCommerce log: `snap` | WooCommerce → Status → Logs (select `snap`) | Draft recovery warnings (e.g., total mismatches), attach/funded edge cases | No tokens | Investigate recovery logic and edge conditions |
 | Order notes (per order) | Woo order admin → Order notes | Human‑readable notes for Snap statuses (DENIED, PENDING_DEL, FUNDED, COMPLETE), journey labels (“Reached Snap income”) | No tokens | See exact status transitions and journey waypoints for a specific order |
 | Order meta (per order) | Woo order admin → Custom fields (or via code/DB) | `_snap_application_id`, `_snap_invoice_number`, `_snap_progress_status`, `_snap_journey_*` flags/timestamps, `_snap_journey_rows` array | Contains app ID/invoice; no tokens | Correlate with Snap; export journey footprints (CSV‑friendly) |
-| REST route outcomes | Network logs / Woo logs above | `/wp-json/snap/v1/attach` ok/failed; `/wp-json/snap/v1/funded` success/idempotent/409 not seeded; `/wp-json/snap/v1/status` results | No tokens in logs; bearer used only server‑side | Verify attach/finalize paths, confirm idempotency, ensure no cart‑coupled creation |
+| REST route outcomes | Network logs / Woo logs above | `/wp-json/snap/v1/attach` ok/failed; `/wp-json/snap/v1/funded` success/idempotent/409 not seeded; `/wp-json/snap/v1/status` results | No tokens in logs; bearer used only server‑side | Verify attach/finalise paths, confirm idempotency, ensure no cart‑coupled creation |
 | Frontend console (SnapRender/Blocks) | Browser devtools on merchant site | Render steps, validation guards, overlay clicks, SDK readiness, auto‑click, limits messages | Tokens are NOT logged; app IDs may appear | Reproduce UI flows and SDK callbacks; validate guard behavior |
 | Diagnostic Utils (manual/auto) | Run `snapDiagnostic()` in console; auto 10s diagnostic | Focus/cursor, DOM path, selectable elements, click diagnostics, focus remediation | No tokens | Troubleshoot UX issues (focus traps, click handling) |
 | WooCommerce notices | Checkout UI | Decline message and “complete your Snap application” warnings; limits messaging | End‑user only | Validate UX: declines blocked, pending not allowed, limits enforced |

@@ -532,7 +532,7 @@ if ( ! function_exists( 'snap_find_blocks_draft_order_id' ) ) {
             if ( ! $order ) { return 0; }
             if ( null !== $expected_total ) {
                 if ( wc_format_decimal( $order->get_total() ) !== wc_format_decimal( $expected_total ) ) {
-                    wc_get_logger()->warning( sprintf( 'Draft order total mismatch; expected %s, found %s (#%d)', $expected_total, $order->get_total(), $order_id ), array( 'source' => 'snap-debug' ) );
+                    wc_get_logger()->warning( sprintf( 'Draft order total mismatch; expected %s, found %s (#%d)', $expected_total, $order->get_total(), $order_id ), array( 'source' => 'snap' ) );
                 }
             }
             return $order_id;
