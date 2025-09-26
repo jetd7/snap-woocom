@@ -92,11 +92,6 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
               }
             }
           }
-          if (currentPath.includes('/you-have-done-it')) {
-            console.log('🎯 URL funded detected: /you-have-done-it — triggering onSuccess');
-            __stopUrlCompletionWatcher();
-            try { triggerSuccessFn(appId, token); } catch(e) { console.error('URL watcher onSuccess failed', e); }
-          }
         } catch(e) { console.warn('URL watcher error (ignored)', e); }
       };
       __snapUrlPopstateHandler = checkUrl;
@@ -109,6 +104,34 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
   }
 
   const SnapApplication = {
+    /**
+     * Detect order confirmation page and perform client cleanup.
+     * Clears local Snap app state to avoid reusing a funded app on a later order.
+     */
+    detectAndCleanupOnThankYou() {
+      try {
+        const path = String(window.location.pathname || '');
+        const isThankYou = /(?:\/checkout\/order-received\/|[?&]key=wc_order_)/.test(window.location.href) ||
+                           /order-received/.test(path) ||
+                           /order\-received/.test(path);
+        if (!isThankYou) return;
+        console.log('🧹 [Snap] Thank-you detected → clearing client state');
+        // Mark submitted and clear storage
+        try {
+          const latest = this.getApp() || {};
+          if (latest && latest.id) {
+            this.setApp(Object.assign({}, latest, { submitted: true, lastSubmittedAt: Date.now() }));
+          }
+        } catch(_) {}
+        try { this.clearApp(); } catch(_) {}
+        try {
+          localStorage.removeItem('snap_application_id');
+          localStorage.removeItem('snap_token');
+          localStorage.removeItem('snap_application_status');
+          localStorage.removeItem('snap_finance_approved');
+        } catch(_) {}
+      } catch(_) {}
+    },
     async logServerStatus(appId, token, context = 'poll') {
       try {
         const params = new URLSearchParams({ application_id: appId });
@@ -132,6 +155,10 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
           console.log('[Snap] finalize skipped: already finalized');
           return true;
         }
+        // Always get a fresh server status just before finalize for authoritative mapping
+        try {
+          await this.logServerStatus(applicationId, token, 'preFinalize');
+        } catch(_) {}
         // Optional: token freshness pre-check (lightweight)
         try {
           const app = this.getApp() || {};
@@ -272,7 +299,7 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
     },
     onApplicationId(appId, token, snapParams, invoiceNumber) {
       try {
-        console.log('📝 Application ID received:', appId);
+        console.log('📝 [SDK ▶] onApplicationId → attach+persist', { appId });
         applicationStatus = 'pending';
         applicationId = appId;
         applicationToken = token;
@@ -324,7 +351,7 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
     // Approved (pre-sign): persist only; keep checkout blocked
     onApproved(appId, token, submitClassicCb, submitBlocksCb) {
       try {
-        console.log('🟡 onApproved: pre-sign approved', appId);
+        console.log('🟡 [SDK ▶] onApproved → keep blocked, await signing', { appId });
         // Persist state only; DO NOT allow submission yet
         this.setApp({ id: appId, token: token, status: 'approved' });
         // ensure blocking is active
@@ -340,8 +367,8 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
     async onSuccess(appId, token) {
       try {
         const __cid = `${appId}-${Math.random().toString(36).slice(2,8)}`;
-        console.info(`[Snap] onSuccess funded; cid=${__cid}`);
-        console.log('✅ success/funded (post-sign):', appId);
+        console.info(`🏁 [SDK ▶] onSuccess funded; cid=${__cid}`);
+        console.log('✅ [Path] post-sign → verify → finalize');
         if (window.__snapFinalized) { console.log('[Snap] onSuccess: already finalized, ignoring'); return; }
         // Mark status as success at module-level for any pending guards
         applicationStatus = 'success';
@@ -383,7 +410,7 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
     },
 
     onDenied(appId, token) {
-      console.warn('[Snap] Application denied:', appId);
+      console.warn('⛔ [SDK ▶] onDenied → set failed, block UI', { appId });
       applicationStatus = 'denied';
       applicationId = appId;
       applicationToken = token;
@@ -411,7 +438,7 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
     },
 
     onError(appId, token, message) {
-      console.error('[Snap] Error:', message, 'app:', appId);
+      console.error('❌ [SDK ▶] onError', { appId, message });
       applicationStatus = 'error';
       applicationId = appId;
       applicationToken = token;
@@ -424,15 +451,15 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
     },
 
     onUnverifiedAccount(appId, token) {
-      console.warn('[Snap] Unverified bank account:', appId);
+      console.warn('🔎 [SDK ▶] onUnverifiedAccount', { appId });
     },
 
     onPaymentFailure(appId, token) {
-      console.warn('[Snap] Payment failure:', appId);
+      console.warn('💥 [SDK ▶] onPaymentFailure', { appId });
     },
 
     onWithdrawn(appId, token) {
-      console.warn('[Snap] Application withdrawn:', appId);
+      console.warn('🚫 [SDK ▶] onWithdrawn', { appId });
     },
 
     isBlocks() {
@@ -699,8 +726,16 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
         try {
           const checkout = window.wp.data.select('wc/store/checkout');
           if (checkout && typeof checkout.hasError === 'function' && checkout.hasError()) {
-            const msg = (typeof checkout.getErrorMessage === 'function') ? checkout.getErrorMessage() : undefined;
-            console.error('[Snap][Blocks] Checkout error observed:', msg);
+            let msg = undefined;
+            try { msg = (typeof checkout.getErrorMessage === 'function') ? checkout.getErrorMessage() : undefined; } catch(_) {}
+            if (!window.__snapLoggedCheckoutError) {
+              if (msg) { console.error('[Snap][Blocks] Checkout error observed:', msg); }
+              else { console.warn('[Snap][Blocks] Checkout error observed'); }
+              try {
+                window.__snapLoggedCheckoutError = true;
+                setTimeout(function(){ try { delete window.__snapLoggedCheckoutError; } catch(_) {} }, 3000);
+              } catch(_) {}
+            }
             // Ensure we can retry submissions
             try {
               const prev = window.SnapStorage?.get?.('application') || {};
@@ -713,4 +748,7 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
       });
     }
   } catch(_) {}
+
+  // Thank-you cleanup: run at load in case user lands here directly
+  try { window.SnapApplication?.detectAndCleanupOnThankYou?.(); } catch(_) {}
 })();

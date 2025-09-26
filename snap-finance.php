@@ -3,7 +3,7 @@
  * Plugin Name: Snap Finance Payment Gateway
  * Plugin URI:  https://finmatch.co.uk
  * Description: Allow customers to apply for finance through Snap Finance UK (Classic & Blocks).
- * Version:     1.0.2
+ * Version:     1.0.3
  * Author:      FinMatch
  * Author URI:  https://finmatch.co.uk
  * Text Domain: snap-finance-gateway
@@ -23,7 +23,7 @@ if ( ! defined( 'SNAP_FINANCE_PLUGIN_VERSION' ) ) {
         require_once ABSPATH . 'wp-admin/includes/plugin.php';
     }
     $data = function_exists( 'get_file_data' ) ? get_file_data( __FILE__, array( 'Version' => 'Version' ) ) : array();
-    define( 'SNAP_FINANCE_PLUGIN_VERSION', isset( $data['Version'] ) && $data['Version'] ? $data['Version'] : '1.0.2' );
+    define( 'SNAP_FINANCE_PLUGIN_VERSION', isset( $data['Version'] ) && $data['Version'] ? $data['Version'] : '1.0.3' );
 }
 
 /**
@@ -348,6 +348,9 @@ if ( ! function_exists( 'snap_clear_wc_session_after_finalize' ) ) {
         if ( isset( $_SESSION['snap_seeded_order_id'] ) ) {
             unset( $_SESSION['snap_seeded_order_id'] );
         }
+        // Also clear the signed cookie so a future checkout cannot accidentally
+        // associate a new draft order with a prior funded application.
+        try { snap_clear_signed_cookie( 'snap_seeded_order_id' ); } catch ( Throwable $e ) {}
     }
 }
 
