@@ -91,15 +91,15 @@ A WordPress plugin that integrates Snap Finance UK's payment gateway with WooCom
 ## 🏗️ **Architecture Overview (Updated)**
 
 Highlights in 1.0.0
-- Denied finalize no longer fails with order_not_seeded: fallback to latest Blocks draft order
+- Denied finalise no longer fails with order_not_seeded: fallback to latest Blocks draft order
 - Server mapping hardened: failed/cancelled orders are not upshifted by attach/funded
 - Production Status API base set to `https://prod-api.snapfinance.co.uk` via dynamic test mode
 - Fix: Orders that reach failed/cancelled are not bumped back to pending by attach/funded flows
 - Enforcement: Server-side process_payment blocks UI placement unless FUNDED/COMPLETE; DENIED fails with notice
 - API Base: Production calls use `https://prod-api.snapfinance.co.uk` when not in test mode
 - Attach → Enrich (no seed creation): The plugin no longer creates a new order onApplicationId. Instead it attaches Snap metadata to the existing Woo Blocks draft order.
-- REST-first finalize: `POST /snap/v1/funded` verifies Snap status server‑side and transitions the same order. Idempotent and never creates.
-- Limits enforcement: Snap is hidden when total is outside £250–£10,000 (Classic `is_available`, Blocks `is_active`). Frontend limits messaging removed; server finalize remains the final guard.
+- REST-first finalise: `POST /snap/v1/funded` verifies Snap status server‑side and transitions the same order. Idempotent and never creates.
+- Limits enforcement: Snap is hidden when total is outside £250–£10,000 (Classic `is_available`, Blocks `is_active`). Frontend limits messaging removed; server finalise remains the final guard.
 - Thank‑you page hardening: Blocks APIs are guarded so the order confirmation page doesn’t throw console errors.
 - Server status logs and journey tracking added; DENIED maps to failed; PENDING_DEL note clarified; client sends DENIED to server without redirect.
 
@@ -382,7 +382,7 @@ CREATE TABLE wp_snap_application_details (
 ### 0.2
 - Removed seed creation; adopted attach → enrich architecture
 - Added `/attach` endpoint; `/funded` is idempotent and non‑creating
-- Hide Snap outside £250–£10,000 (Classic + Blocks); server finalize remains a guard
+- Hide Snap outside £250–£10,000 (Classic + Blocks); server finalise remains a guard
 - Thank‑you page guards for Blocks APIs to avoid decodeEntities errors
 - Logging: ATTACH/FUNDED start/done lines; global order creation logs
 
