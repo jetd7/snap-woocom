@@ -318,6 +318,8 @@ class WC_Snap_Finance_Gateway extends WC_Payment_Gateway {
 
         $params = [
             'plugin_version' => ( defined('SNAP_FINANCE_PLUGIN_VERSION') ? SNAP_FINANCE_PLUGIN_VERSION : 'dev' ),
+            // Enable verbose SDK callback logging in console
+            'debug_callbacks' => true,
             'ajax_url'     => admin_url( 'admin-ajax.php' ),
             'nonce'        => wp_create_nonce( 'snap_finance_nonce' ),
             'rest_nonce'   => wp_create_nonce( 'wp_rest' ),

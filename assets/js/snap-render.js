@@ -37,6 +37,7 @@ window.SnapRender = {
     _autoClickNext: false, // One-shot: auto-click new Snap button after render
     _cancelRequested: false,
     _timeouts: new Set(),
+    _sdkLoggerInstalled: false,
 
     _trackTimeout(fn, delay) {
         const id = setTimeout(() => {
@@ -382,6 +383,7 @@ window.SnapRender = {
         if (typeof snapuk !== 'undefined' && snapuk.checkout && typeof snapuk.checkout.button === 'function') {
             console.log('✅ STEP 2: SDK fully available immediately (snapuk.checkout.button ready)');
             console.log('✅ STEP 2: SDK ready timestamp:', new Date().toISOString());
+            try { this.installSdkCallbackLoggerIfEnabled?.(); } catch(_) {}
             callback();
             return;
         }
@@ -403,6 +405,7 @@ window.SnapRender = {
                 clearInterval(interval);
                 console.log(`✅ STEP 2: SDK became available after ${attempts * 100}ms (snapuk.checkout.button ready)`);
                 console.log('✅ STEP 2: SDK ready timestamp:', new Date().toISOString());
+                try { this.installSdkCallbackLoggerIfEnabled?.(); } catch(_) {}
                 callback();
             } else if (attempts >= maxAttempts) {
                 clearInterval(interval);
@@ -417,6 +420,32 @@ window.SnapRender = {
                 // Do NOT callback() - prevent downstream errors
             }
         }, 100); // Check every 100ms
+    },
+
+    // Install a developer-only SDK callback logger when enabled via flag
+    installSdkCallbackLoggerIfEnabled() {
+        try {
+            const enabled = !!(window.snap_params && window.snap_params.debug_callbacks);
+            if (!enabled || this._sdkLoggerInstalled) return;
+            if (!window.snapuk || !snapuk.checkout || typeof snapuk.checkout.button !== 'function') return;
+            const orig = snapuk.checkout.button;
+            snapuk.checkout.button = function(config) {
+                const cfg = Object.assign({}, config);
+                const keys = ['onApplicationId','onClose','onApproved','onApprovedWithConditions','onSuccess','onError','onDenied','onUnverifiedAccount','onPaymentFailure','onWithdrawn'];
+                keys.forEach((k) => {
+                    if (typeof cfg[k] === 'function') {
+                        const fn = cfg[k];
+                        cfg[k] = function() {
+                            try { console.log(`💜🧩 SDK callback: ${k}`, { ts: new Date().toISOString(), args: Array.from(arguments) }); } catch(_) {}
+                            return fn.apply(this, arguments);
+                        };
+                    }
+                });
+                try { console.info('✅ Snap SDK callback logger installed'); } catch(_) {}
+                return orig(cfg);
+            };
+            this._sdkLoggerInstalled = true;
+        } catch(_) {}
     },
 
     // prepareContainer() removed as unused; forceExplicitContainerSizing + host replacement are used instead
