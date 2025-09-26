@@ -46,8 +46,8 @@ Production-ready Snap Finance UK gateway for WooCommerce (Classic & Blocks). Des
 | order_created | On Woo order creation | order_id, wc_status, method |
 | attach_ok | App ID attached to draft order | order_id, application_id, invoice_number, wc_status, method |
 | status_ok / status_polled | Server status check succeeded | application_id, progress |
-| funded_start | Finalize started for an order | order_id, application_id, progress, wc_status, method |
-| funded_done | Finalize applied to order | order_id, application_id, progress, wc_status, method |
+| funded_start | Finalise started for an order | order_id, application_id, progress, wc_status, method |
+| funded_done | Finalise applied to order | order_id, application_id, progress, wc_status, method |
 | funded_no_redirect | Non‑funded state → no thank‑you URL | order_id, application_id, progress, note |
 | funded_fetch_failed | Status API error | application_id, note |
 | journey | Snap journey stage observed | order_id, application_id, stage |
@@ -155,7 +155,7 @@ snap-finance-payment-V2.2/
 ## 🔧 **Technical Implementation**
 
 ### **Backend (PHP)**
-- **Main Plugin**: `snap-finance.php` - WordPress plugin initialization
+- **Main Plugin**: `snap-finance.php` - WordPress plugin initialisation
 - **Gateway Class**: `includes/class-wc-snap-finance-gateway.php` - WooCommerce payment gateway
 - **Database**: Creates `wp_snap_application_details` table for tracking applications
 - **SDK Loading**: Enqueues Snap Finance UK SDK in `<head>` when gateway is enabled
@@ -217,7 +217,7 @@ snap-finance-payment-V2.2/
 
 ## 🔄 UPDATED COMPREHENSIVE SNAP FINANCE PLUGIN FLOW (Chronological)
 
-Phase 1: PHP Initialization (Page Load)
+Phase 1: PHP Initialisation (Page Load)
 - Group 1: Credential lookup & test mode detection
   - 1.1 Test Mode Check → `$this->testmode` in `includes/class-wc-snap-finance-gateway.php`
   - 1.2 Sandbox vs Live SDK URL selection → `includes/class-wc-snap-finance-gateway.php`
@@ -228,7 +228,7 @@ Phase 1: PHP Initialization (Page Load)
   - 2.3 Cart products processing → `WC()->cart->get_cart()`
   - 2.4 Customer data extraction → `WC()->checkout->get_value()`
 - Group 3: PHP → JS data transfer
-  - 3.1 `snap_params` localization → `wp_localize_script('snap-render', 'snap_params', $params)`
+  - 3.1 `snap_params` localisation → `wp_localize_script('snap-render', 'snap_params', $params)`
   - 3.2 Credential transfer → `client_id`, `merchant_id`
   - 3.3 Transaction data transfer → transaction array
 
@@ -246,11 +246,11 @@ Phase 3: JavaScript Container Setup (User Selects Snap)
   - 4.3 Container styling → `prepareContainer()` in `assets/js/snap-render.js`
   - 4.4 Readiness check → `containerIsReady()` in `assets/js/snap-render.js`
 
-Phase 4: SDK Initialization & Availability
+Phase 4: SDK Initialisation & Availability
 - Group 7: SDK wait/ready/init
   - 5.1 `waitForSDK()`
   - 5.2 SDK ready check → `typeof snapuk !== 'undefined' && snapuk.checkout.button`
-  - 5.3 SDK initialization → `_sdkInitialized` flag
+  - 5.3 SDK initialisation → `_sdkInitialized` flag
 
 Phase 5: Transaction Data Processing (After SDK Ready)
 - Group 8: JS-side transaction rebuild
@@ -301,7 +301,7 @@ Phase 7: Post-Render Setup (After Button Appears)
   - `🧹 Cleared container for fresh render`
 - SDK availability & init
   - `✅ STEP 2: SDK fully available immediately (snapuk.checkout.button ready)`
-  - `✅ STEP 3: Snap SDK initialized with client_id: ...`
+  - `✅ STEP 3: Snap SDK initialied with client_id: ...`
 - Transaction & validation
   - `📋 Transaction data for Snap SDK: { invoiceNumber: ..., validationStatus: ... }`
   - `↺ Stable transaction unchanged - updating validation messages only` (no full re-render)
@@ -368,7 +368,7 @@ CREATE TABLE wp_snap_application_details (
 ## 🔄 **Version History**
 
 ### 0.4
-- Centralized version handling via `SNAP_FINANCE_PLUGIN_VERSION` (PHP) and `snap_params.plugin_version` (JS); removed hardcoded versions in logs and icon URLs
+- Centralised version handling via `SNAP_FINANCE_PLUGIN_VERSION` (PHP) and `snap_params.plugin_version` (JS); removed hardcoded versions in logs and icon URLs
 - Hide Snap outside limits at source (Classic `is_available`, Blocks `is_active`); removed frontend limits messaging
 - Added STEP 4 logs and explicit max-amount rejection logging
 
