@@ -499,7 +499,7 @@ window.SnapRender = {
             transaction: transaction,
 
             onApplicationId: (applicationId, token) => {
-                console.log('📝 onApplicationId', applicationId);
+                console.log('💜 onApplicationId', applicationId);
                 console.log('📨 Application Status: Application Created');
                 
                 // Clear invoice cache after successful application start
@@ -520,10 +520,10 @@ window.SnapRender = {
                 window.SnapApplication.onApplicationId(applicationId, token, snapParams, transaction.invoiceNumber);
             },
             onClose: (applicationId, token) => {
-                console.log('🪟 onClose', applicationId || '(none)');
+                console.log('💜 onClose', applicationId || '(none)');
             },
             onApproved: (applicationId, token) => {
-                console.log('🟡 onApproved', applicationId);
+                console.log('💜 onApproved', applicationId);
                 try {
                     const p = window.SnapApplication?.saveSnapApp?.(applicationId, token);
                     p?.catch?.((err) => {
@@ -538,7 +538,7 @@ window.SnapRender = {
                 );
             },
             onApprovedWithConditions: (applicationId, token) => {
-                console.log('✅ onApprovedWithConditions', applicationId);
+                console.log('💜 onApprovedWithConditions', applicationId);
                 try {
                     const p = window.SnapApplication?.saveSnapApp?.(applicationId, token);
                     p?.catch?.((err) => {
@@ -553,8 +553,8 @@ window.SnapRender = {
                 );
             },
             onSuccess: (applicationId, token) => {
-                console.log('🏁 onSuccess', applicationId);
-                console.log('🏁 Application Status: Application Approved & Completed');
+                console.log('💜 onSuccess', applicationId);
+                console.log('💜 Application Status: Application Approved & Completed');
                 try {
                     const p = window.SnapApplication?.saveSnapApp?.(applicationId, token);
                     p?.catch?.((err) => {
@@ -565,26 +565,26 @@ window.SnapRender = {
                 window.SnapApplication.onSuccess(applicationId, token);
             },
             onError: (applicationId, token, message) => {
-                console.error('❌ onError', { application_id: applicationId, message });
-                console.error('❌ Application Status: Error occurred');
+                console.error('💜 onError', { application_id: applicationId, message });
+                console.error('💜 Application Status: Error occurred');
                 window.SnapApplication.onError(applicationId, token, message);
                 this.showError(containerEl, message);
             },
             onDenied: (applicationId, token) => {
-                console.log('⛔ onDenied', applicationId);
+                console.log('💜 onDenied', applicationId);
                 window.SnapApplication.onDenied(applicationId, token);
                 this.showError(containerEl, 'Your Snap Finance application was not approved. Please try another payment method.');
             },
             onUnverifiedAccount: (applicationId, token) => {
-                console.log('🔎 onUnverifiedAccount', applicationId);
+                console.log('💜 onUnverifiedAccount', applicationId);
                 window.SnapApplication.onUnverifiedAccount(applicationId, token);
             },
             onPaymentFailure: (applicationId, token) => {
-                console.log('💥 onPaymentFailure', applicationId);
+                console.log('💜 onPaymentFailure', applicationId);
                 window.SnapApplication.onPaymentFailure(applicationId, token);
             },
             onWithdrawn: (applicationId, token) => {
-                console.log('🚫 onWithdrawn', applicationId);
+                console.log('💜 onWithdrawn', applicationId);
                 window.SnapApplication.onWithdrawn(applicationId, token);
             }
         };
