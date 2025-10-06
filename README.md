@@ -1,4 +1,4 @@
-## Snap Finance WooCommerce Plugin (v1.0.5)
+## Snap Finance WooCommerce Plugin (v1.0.6)
 
 Production-ready Snap Finance UK gateway for WooCommerce (Classic & Blocks). Designed for clarity, security, and a clean user journey.
 
@@ -393,6 +393,21 @@ CREATE TABLE wp_snap_application_details (
 - Enhanced debugging and error handling
 - Mobile compatibility improvements
 - Security enhancements
+
+## 📋 **Changelog**
+
+### v1.0.6 (September 30, 2025)
+- **Fixed**: Added proper spacing between theme caret/diamond and Snap validation warning on classic checkout
+- **CSS**: Payment box now maintains visual hierarchy with 14px breathing room above error messages
+- **Theme Compatibility**: Improved compatibility with themes that use rotated `::before` pseudo-elements as visual carets
+
+### v1.0.5 (Previous)
+- Production-ready release with Classic & Blocks checkout support
+- Server-verified status API integration
+- Attach/funded REST endpoints
+- Journey tracking and comprehensive logging
+
+---
 
 ## 📄 **License & Terms of Use**
 

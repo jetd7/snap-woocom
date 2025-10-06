@@ -834,6 +834,27 @@ class WC_Snap_Finance_Gateway extends WC_Payment_Gateway {
             max-width: 100% !important;
             min-width: 300px !important;
         }
+        
+        /* ─────────────────────────────────────────────────────────────────────
+         * Fix: Add spacing between theme caret/diamond and validation warning
+         * Theme renders a white 10×10 square rotated 45° as ::before caret
+         * This creates breathing room so the red warning sits below it cleanly
+         * ───────────────────────────────────────────────────────────────────── */
+        
+        /* Ensure payment_box is positioned for absolute caret positioning */
+        .woocommerce-checkout li.payment_method_snapfinance_refined .payment_box {
+            position: relative !important;
+        }
+        
+        /* Add top spacing to validation message container (matches any dynamic ID suffix) */
+        .woocommerce-checkout li.payment_method_snapfinance_refined .payment_box [id^="snap-validation-message-"] {
+            padding-top: 14px !important;
+        }
+        
+        /* Ensure no negative margins on inner validation div that could fight spacing */
+        .woocommerce-checkout li.payment_method_snapfinance_refined .payment_box [id^="snap-validation-message-"] > div {
+            margin-top: 0 !important;
+        }
 
         </style>
         <?php
