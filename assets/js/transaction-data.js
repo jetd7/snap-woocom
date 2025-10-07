@@ -93,6 +93,41 @@
       
 
 
+      // Validate terms and conditions checkbox
+      const termsCheckbox = document.querySelector('#terms');
+      if (termsCheckbox && !termsCheckbox.checked) {
+        msgs.push('Please accept the terms and conditions');
+      }
+
+      // Validate shipping address if "ship to different address" is checked
+      const shipToDifferentAddress = document.querySelector('#ship-to-different-address-checkbox');
+      if (shipToDifferentAddress && shipToDifferentAddress.checked) {
+        const shippingFields = {
+          'shipping_first_name': 'Shipping First Name',
+          'shipping_last_name': 'Shipping Last Name', 
+          'shipping_address_1': 'Shipping Address',
+          'shipping_city': 'Shipping City',
+          'shipping_postcode': 'Shipping Postcode'
+        };
+
+        for (const [fieldId, fieldName] of Object.entries(shippingFields)) {
+          const field = document.querySelector(`#${fieldId}`);
+          if (field && !field.value.trim()) {
+            msgs.push(`Missing ${fieldName}`);
+          }
+        }
+
+        // Validate shipping postcode format if provided
+        const shippingPostcode = document.querySelector('#shipping_postcode');
+        if (shippingPostcode && shippingPostcode.value.trim()) {
+          const pc = shippingPostcode.value.trim().toUpperCase();
+          const ukPcRe = /^(GIR 0AA|(?:(?:[A-PR-UWYZ][0-9]{1,2})|(?:[A-PR-UWYZ][A-HK-Y][0-9]{1,2})|(?:[A-PR-UWYZ][0-9][A-HJKPSTUW])|(?:[A-PR-UWYZ][A-HK-Y][0-9][ABEHMNPRVWXY]))\s?[0-9][ABD-HJLNP-UW-Z]{2})$/i;
+          if (!ukPcRe.test(pc)) {
+            msgs.push('Please enter a valid shipping postcode');
+          }
+        }
+      }
+
       const total = (tx.products?.[0]?.price || 0);
       const minAmount = parseFloat(snapParams?.min_amount ?? '0');
       const maxAmount = parseFloat(snapParams?.max_amount ?? '999999');
@@ -111,6 +146,12 @@
       const needEmail = messages.some(m => /Email/i.test(m));
       // Mobile number highlighting removed - WooCommerce doesn't require it
       const needPost  = messages.some(m => /Postcode/i.test(m));
+      const needTerms = messages.some(m => /terms and conditions/i.test(m));
+      const needShippingFirst = messages.some(m => /Shipping First Name/i.test(m));
+      const needShippingLast = messages.some(m => /Shipping Last Name/i.test(m));
+      const needShippingAddress = messages.some(m => /Shipping Address/i.test(m));
+      const needShippingCity = messages.some(m => /Shipping City/i.test(m));
+      const needShippingPost = messages.some(m => /Shipping Postcode/i.test(m));
 
       const mark = (selector) => {
         const el = document.querySelector(selector);
@@ -125,6 +166,16 @@
       if (needEmail) mark('[name="billing_email"]');
       // Mobile number field highlighting removed
       if (needPost)  mark('[name="billing_postcode"]');
+      
+      // Highlight terms checkbox
+      if (needTerms) mark('#terms');
+      
+      // Highlight shipping fields
+      if (needShippingFirst) mark('#shipping_first_name');
+      if (needShippingLast) mark('#shipping_last_name');
+      if (needShippingAddress) mark('#shipping_address_1');
+      if (needShippingCity) mark('#shipping_city');
+      if (needShippingPost) mark('#shipping_postcode');
     },
 
     /**
@@ -138,7 +189,13 @@
         'email': '[name="billing_email"]',
         'postcode': '[name="billing_postcode"]',
         'address1': '[name="billing_address_1"]',
-        'city': '[name="billing_city"]'
+        'city': '[name="billing_city"]',
+        'terms': '#terms',
+        'shippingFirstName': '#shipping_first_name',
+        'shippingLastName': '#shipping_last_name',
+        'shippingAddress': '#shipping_address_1',
+        'shippingCity': '#shipping_city',
+        'shippingPostcode': '#shipping_postcode'
       };
 
       let fieldsToClear = [];
@@ -317,22 +374,34 @@
 
         // PRIORITY 3: Try DOM queries (works for Classic checkout)
         const getFormValue = (name) => {
-          // Updated selectors for WooCommerce Blocks checkout
+          // Updated selectors for both Classic and Blocks WooCommerce checkout
           const selectors = {
-            'billing_first_name': '#billing-first_name',
-            'billing_last_name': '#billing-last_name', 
-            'billing_email': '#email',
-            'billing_phone': '#billing-phone',
-            'billing_address_1': '#billing-address_1',
-            'billing_address_2': '#billing-address_2',
-            'billing_city': '#billing-city',
-            'billing_postcode': '#billing-postcode'
+            'billing_first_name': '#billing_first_name, #billing-first_name, [name="billing_first_name"]',
+            'billing_last_name': '#billing_last_name, #billing-last_name, [name="billing_last_name"]', 
+            'billing_email': '#billing_email, #email, [name="billing_email"]',
+            'billing_phone': '#billing_phone, [name="billing_phone"]',
+            'billing_address_1': '#billing_address_1, #billing-address_1, [name="billing_address_1"]',
+            'billing_address_2': '#billing_address_2, #billing-address_2, [name="billing_address_2"]',
+            'billing_city': '#billing_city, #billing-city, [name="billing_city"]',
+            'billing_postcode': '#billing_postcode, #billing-postcode, [name="billing_postcode"]'
           };
           
           const selector = selectors[name] || `[name="${name}"]`;
-          const el = document.querySelector(selector);
+          // Try multiple selectors for Classic vs Blocks compatibility
+          const selectorList = selector.split(', ');
+          let el = null;
+          let usedSelector = '';
+          
+          for (const sel of selectorList) {
+            el = document.querySelector(sel.trim());
+            if (el) {
+              usedSelector = sel.trim();
+              break;
+            }
+          }
+          
           const value = el ? el.value.trim() : '';
-          console.log(`🔍 Form field [${name}]: "${value}" (element found: ${!!el}, selector: ${selector})`);
+          console.log(`🔍 Form field [${name}]: "${value}" (element found: ${!!el}, selector: ${usedSelector || selector})`);
           return value;
         };
 
@@ -360,6 +429,46 @@
 
         console.log('🔍 Real-time form values from DOM:', realTimeData);
 
+        // PRIORITY: Use server-side data first 
+        // This is more reliable than DOM field reading and matches how other payment gateways work
+        if (window.snap_params && (
+          window.snap_params.billing_first_name || 
+          window.snap_params.billing_last_name || 
+          window.snap_params.billing_email
+        )) {
+          console.log('✅ Using server-side snap_params data (recommended approach)');
+          return {
+            firstName: window.snap_params.billing_first_name || '',
+            lastName:  window.snap_params.billing_last_name || '',
+            email:     window.snap_params.billing_email || '',
+            mobileNumber: window.snap_params.billing_phone || '',
+            streetAddress: window.snap_params.billing_address_1 || '',
+            unit:          window.snap_params.billing_address_2 || '',
+            city:          window.snap_params.billing_city || '',
+            houseName: '',
+            houseNumber: '',
+            postcode:      window.snap_params.billing_postcode || ''
+          };
+        }
+
+        // FALLBACK: Check if we found any real data from DOM
+        const hasRealData = Object.values(realTimeData).some(value => value && value.trim() !== '');
+        
+        if (!hasRealData) {
+          console.log('⚠️ No server-side or DOM data found - using empty values');
+          return {
+            firstName: '',
+            lastName:  '',
+            email:     '',
+            mobileNumber: '',
+            streetAddress: '',
+            unit:          '',
+            city:          '',
+            houseName: '',
+            houseNumber: '',
+            postcode:      ''
+          };
+        }
 
         // Always prefer real-time DOM snapshot for Blocks/Classic to avoid stale snap_params
         console.log('✅ Using real-time DOM form data (may be empty strings when not filled)');
@@ -379,8 +488,8 @@
         console.error('❌ Error getting customer data:', e);
       }
 
-      // Final fallback to snap_params
-      console.log('🔍 Using snap_params fallback');
+      // Final fallback to snap_params (server-side data)
+      console.log('🔍 Using snap_params fallback (server-side data)');
       return {
         firstName: snapParams?.billing_first_name || '',
         lastName:  snapParams?.billing_last_name  || '',

@@ -694,6 +694,9 @@ class WC_Snap_Finance_Gateway extends WC_Payment_Gateway {
             transition: opacity 0.2s ease-in-out !important;
             display: block !important;
             position: relative !important;
+            /* CRITICAL: Ensure container has explicit dimensions before SDK renders */
+            box-sizing: border-box !important;
+            overflow: visible !important;
         }
         
         /* Force override inline styles */
@@ -833,6 +836,9 @@ class WC_Snap_Finance_Gateway extends WC_Payment_Gateway {
             width: 100% !important;
             max-width: 100% !important;
             min-width: 300px !important;
+            /* CRITICAL: Maintain explicit height for SDK */
+            height: 70px !important;
+            min-height: 70px !important;
         }
         
         /* ─────────────────────────────────────────────────────────────────────

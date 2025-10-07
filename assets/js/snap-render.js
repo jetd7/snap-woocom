@@ -466,13 +466,40 @@ window.SnapRender = {
             console.log('🔍 Container not ready: not connected to DOM');
             return false;
         }
-        // Only ensure it is not display:none. Let SDK handle sizing/visibility.
+        
+        // CRITICAL: Ensure container has explicit dimensions before SDK renders
         const cs = window.getComputedStyle(el);
         if (cs.display === 'none') {
             console.log('🔍 Container not ready: display:none');
             return false;
         }
-        console.log('✅ Container present; deferring sizing to SDK');
+        
+        // Force explicit dimensions to prevent SDK SVG height errors
+        if (!el.style.height || el.style.height === '') {
+            el.style.height = '70px';
+            console.log('🔧 Forced container height to 70px');
+        }
+        if (!el.style.minHeight || el.style.minHeight === '') {
+            el.style.minHeight = '70px';
+            console.log('🔧 Forced container min-height to 70px');
+        }
+        if (!el.style.width || el.style.width === '') {
+            el.style.width = '300px';
+            console.log('🔧 Forced container width to 300px');
+        }
+        if (!el.style.minWidth || el.style.minWidth === '') {
+            el.style.minWidth = '300px';
+            console.log('🔧 Forced container min-width to 300px');
+        }
+        
+        console.log('✅ Container ready with explicit dimensions:', {
+            height: el.style.height,
+            width: el.style.width,
+            computed: {
+                height: cs.height,
+                width: cs.width
+            }
+        });
         return true;
     },
 
@@ -660,16 +687,28 @@ window.SnapRender = {
                         if (!host) {
                             host = document.createElement('div');
                             host.className = 'snapuk-host';
+                            // CRITICAL: Ensure host has explicit dimensions
+                            host.style.width = '100%';
+                            host.style.height = '70px';
+                            host.style.minHeight = '70px';
+                            host.style.minWidth = '300px';
+                            host.style.display = 'block';
+                            host.style.position = 'relative';
                             containerEl.appendChild(host);
+                            console.log('🔧 Created host element with explicit dimensions');
                         }
 
                         // Do not manipulate host opacity/visibility; allow SDK to paint immediately
 
                         try {
                             const configWithTarget = Object.assign({}, buttonConfig, { target: host });
+                            console.log('🎯 Calling SDK with target host:', host);
                             snapuk.checkout.button(configWithTarget);
                         } catch (e) {
-                            try { snapuk.checkout.button(buttonConfig); } catch (_) {}
+                            console.warn('⚠️ SDK call with target failed, trying without target:', e);
+                            try { snapuk.checkout.button(buttonConfig); } catch (e2) {
+                                console.error('❌ SDK call completely failed:', e2);
+                            }
                         }
                         console.log('✅ STEP 5: Snap Finance button rendered successfully');
                         try { this.ensureShadowHostVisible(containerEl); } catch(_) {}

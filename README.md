@@ -1,9 +1,12 @@
-## Snap Finance WooCommerce Plugin (v1.0.6)
+## Snap Finance WooCommerce Plugin (v1.0.11)
 
 Production-ready Snap Finance UK gateway for WooCommerce (Classic & Blocks). Designed for clarity, security, and a clean user journey.
 
 ### Compatibility
 - WordPress 5.8+ (tested 6.6), WooCommerce 6.0+ (tested 9.1), PHP 7.4+, HPOS compatible.
+
+### ⚠️ **Plugin Conflicts**
+- **WP Content Copy Protection & No Right Click**: This plugin prevents text input in Snap's OTP verification modal. Deactivate this plugin if customers cannot enter OTP codes.
 
 ### How it works
 - Checkout shows a Snap button. Customer applies/signs in the Snap popup.
@@ -139,7 +142,6 @@ snap-finance-payment-V2.2/
 ├── includes/
 │   ├── class-wc-snap-finance-gateway.php  ← WooCommerce gateway class
 │   ├── diagnostic-utils.js         ← Legacy debugging utilities (not currently used)
-│   └── snap-focus-guard.js         ← Focus management for modals (future use)
 ├── assets/
 │   ├── js/
 │   │   ├── snap-render.js          ← Shared renderer (Classic + Blocks)
@@ -168,7 +170,6 @@ snap-finance-payment-V2.2/
 - **Form Monitoring (jQuery-free)**: `assets/js/form-monitor-util.js` - Event-driven validation mirroring (Classic + Blocks)
 - **Transaction Data**: `assets/js/transaction-data.js` - Build/validate Snap transaction object
 - **Legacy Utilities**: `includes/diagnostic-utils.js` (not currently used)
-- **Future Utilities**: `includes/snap-focus-guard.js` (available for modal focus management)
 
 ### **Architecture Benefits**
 - **Single Source of Truth**: Only `snap-render.js` calls the Snap SDK
@@ -395,6 +396,44 @@ CREATE TABLE wp_snap_application_details (
 - Security enhancements
 
 ## 📋 **Changelog**
+
+### v1.0.11 (October 6, 2025)
+- **CLEANUP**: Removed unused `snap-focus-guard.js` file (no longer needed after resolving plugin conflicts)
+- **DOCUMENTATION**: Updated README to reflect current file structure
+- **STABILITY**: Plugin now works correctly after identifying and resolving conflicting plugin issues
+- **COMPATIBILITY NOTE**: **WP Content Copy Protection & No Right Click** plugin is incompatible and prevents text input in Snap's OTP modal
+
+### v1.0.10 (October 6, 2025)
+- **ENHANCED VALIDATION**: Added comprehensive validation for all required WooCommerce checkout fields
+- **Terms & Conditions**: Now validates terms and conditions checkbox before allowing Snap process
+- **Shipping Address**: Validates shipping address fields when "ship to different address" is checked
+- **Complete Validation**: Ensures all merchant-required fields are validated before Snap application
+- **Field Highlighting**: Added visual highlighting for missing terms checkbox and shipping fields
+- **User Experience**: Prevents incomplete applications by validating all required fields upfront
+
+### v1.0.9 (October 6, 2025)
+- **CRITICAL FIX**: Resolved validation issues by prioritizing server-side data over DOM field reading
+- **Root Cause**: DOM field reading was unreliable in Classic checkout, causing validation failures
+- **Solution**: Now uses server-side `snap_params` data first (like Klarna and other payment gateways)
+- **Reliability**: Eliminates dependency on DOM field selectors and form state
+- **Performance**: Faster validation using pre-available server data
+- **Compatibility**: Works consistently across all WooCommerce checkout types
+
+### v1.0.8 (October 6, 2025)
+- **CRITICAL FIX**: Resolved form validation not reading Classic WooCommerce checkout fields
+- **Root Cause**: Field selectors were hardcoded for Blocks checkout, causing validation to fail in Classic
+- **JavaScript**: Updated field selectors to support both Classic (`#billing_first_name`) and Blocks (`#billing-first_name`) formats
+- **Fallback Logic**: Added intelligent fallback to `snap_params` data when DOM fields aren't found
+- **Validation**: Form validation now correctly reads pre-populated fields in Classic checkout
+- **Compatibility**: Full Classic/Blocks checkout compatibility for field detection
+
+### v1.0.7 (October 6, 2025)
+- **CRITICAL FIX**: Resolved Snap button disappearing issue in Classic checkout
+- **Root Cause**: Snap SDK was failing due to undefined SVG height and missing container dimensions
+- **JavaScript**: Enhanced container readiness checks to force explicit dimensions before SDK renders
+- **CSS**: Added critical box-sizing and overflow properties to prevent SDK rendering failures
+- **Error Prevention**: Fixed `TypeError: Cannot read properties of null (reading 'getElementById')` errors
+- **Stability**: Button now renders consistently and remains visible throughout checkout process
 
 ### v1.0.6 (September 30, 2025)
 - **Fixed**: Added proper spacing between theme caret/diamond and Snap validation warning on classic checkout
