@@ -1,4 +1,4 @@
-## Snap Finance WooCommerce Plugin (v1.0.11)
+## Snap Finance WooCommerce Plugin (v1.0.12)
 
 Production-ready Snap Finance UK gateway for WooCommerce (Classic & Blocks). Designed for clarity, security, and a clean user journey.
 
@@ -445,6 +445,20 @@ CREATE TABLE wp_snap_application_details (
 - Server-verified status API integration
 - Attach/funded REST endpoints
 - Journey tracking and comprehensive logging
+
+---
+
+## 📝 **Changelog**
+
+### v1.0.12 (2025-10-08)
+**Fixed:**
+- Classic checkout: Added `updated_checkout` event handler to ensure Snap button persists when WooCommerce AJAX updates occur (e.g., toggling "Ship to different address" checkbox, changing shipping methods, applying coupons)
+- Blocks checkout: Already has proper reactive handling via `wp.data.subscribe()` - no changes needed
+
+**Technical Details:**
+- Classic checkout now listens for WooCommerce's `updated_checkout` event, which fires when the checkout form updates via AJAX
+- When this event occurs and Snap Finance is selected, the container is re-ensured and the button is re-rendered
+- This prevents the Snap button from disappearing during checkout interactions that trigger AJAX refreshes
 
 ---
 

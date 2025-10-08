@@ -193,6 +193,28 @@ jQuery(document).ready(function($) {
                 debouncedRender();
             }
         }, 250));
+        
+        // Listen for WooCommerce checkout updates (CRITICAL for shipping toggle, cart updates, etc.)
+        $(document.body).on('updated_checkout', function() {
+            console.log('🔄 WooCommerce checkout updated - re-checking Snap Finance');
+            
+            // Check if Snap Finance is still selected
+            const selectedMethod = $('input[name="payment_method"]:checked').val();
+            console.log('🔧 Checkout update - selected method:', selectedMethod);
+            
+            if (selectedMethod === 'snapfinance_refined') {
+                console.log('💰 Snap Finance selected after checkout update - ensuring container and re-rendering');
+                
+                // Ensure container exists (it might have been removed during AJAX update)
+                const container = ensureSnapContainer();
+                if (container) {
+                    console.log('✅ Container ensured after checkout update');
+                    debouncedRender();
+                } else {
+                    console.warn('⚠️ Failed to ensure container after checkout update');
+                }
+            }
+        });
     }
     
     /**
