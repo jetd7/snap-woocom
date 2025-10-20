@@ -1,4 +1,4 @@
-## Snap Finance WooCommerce Plugin (v1.0.17)
+## Snap Finance WooCommerce Plugin (v1.0.18)
 
 Production-ready Snap Finance UK gateway for WooCommerce (Classic & Blocks). Designed for clarity, security, and a clean user journey.
 
@@ -467,6 +467,13 @@ CREATE TABLE wp_snap_application_details (
 
 Maintenance:
 - Version alignment only (header/constant/README). No functional changes from 1.0.15.
+
+### v1.0.18 (2025-10-20)
+
+Enhancements:
+- Classic: Resiliency after shipping toggle/coupons — force-show Snap payment box and re-render immediately on `updated_checkout`.
+- Classic: Added MutationObserver to auto-recreate `#snap-uk-checkout` and re-render if removed by Woo AJAX swaps.
+- Cleanup: Moved long inline PHP docs to README pointer; kept only non-obvious code rationale as comments.
 
 ### v1.0.17 (2025-10-20)
 
