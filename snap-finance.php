@@ -36,113 +36,11 @@ add_action( 'before_woocommerce_init', function() {
     }
 } );
 
-/** ========================================================================
- * TERMINOLOGY & LOGGING DOCUMENTATION
- * ========================================================================
- * 
- * IMPORTANT: Understanding Invoice vs Order Numbers
- * --------------------------------------------------
- * - "invoice_number" / "Snap Invoice": Generated transaction ID for Snap API
- *   Format: WC1728405123456 (WC + timestamp + random)
- *   Purpose: Unique identifier for Snap Finance application/transaction
- *   Stored in: Order meta "_snap_invoice_number"
- * 
- * - "order_id" / "WooCommerce Order": WordPress/WooCommerce post ID
- *   Format: Integer (e.g., 131703)
- *   Purpose: WooCommerce's internal order identifier
- *   Stored in: wp_posts.ID where post_type = 'shop_order'
- * 
- * - "application_id" / "App ID": Snap Finance's application identifier
- *   Format: Integer from Snap API (e.g., 57235001)
- *   Purpose: Links to Snap's internal application system
- *   Stored in: Order meta "_snap_application_id"
- * 
- * Order Attachment Flow (Classic vs Blocks)
- * ------------------------------------------
- * 
- * KEY DIFFERENCES: Classic vs Blocks Checkout
- * +--------------------------------+---------------------------+---------------------------+
- * | Aspect                         | CLASSIC CHECKOUT          | BLOCKS CHECKOUT           |
- * +--------------------------------+---------------------------+---------------------------+
- * | Order Creation Timing          | On form submission        | On page load              |
- * | Draft Order Status             | Never created             | 'checkout-draft'          |
- * | Session order_awaiting_payment | Usually empty pre-submit  | Contains draft order ID   |
- * | Primary Attach Method          | snap_invoice_match        | latest_draft              |
- * +--------------------------------+---------------------------+---------------------------+
- * Note: Success rates for each method will be populated based on merchant data analysis.
- * 
- * CLASSIC CHECKOUT FLOW:
- * 1. Customer lands on checkout page
- * 2. Customer fills form fields
- * 3. Customer selects Snap Finance payment method
- * 4. Customer clicks Snap button
- * 5. Snap application created
- * 6. /attach endpoint attempts to find order (methods 1-5 below)
- * 7. Customer completes Snap application
- * 8. Customer submits form
- * 9. WooCommerce creates order
- * 10. /funded endpoint finalizes order
- * 
- * BLOCKS CHECKOUT FLOW:
- * 1. Customer lands on checkout page
- * 2. WooCommerce Blocks creates draft order immediately
- * 3. Draft order stored in session
- * 4. Customer fills form (draft order updates in real-time)
- * 5. Customer selects Snap Finance payment method
- * 6. Customer clicks Snap button
- * 7. Snap application created
- * 8. /attach endpoint finds draft order ✅
- * 9. Customer completes Snap application
- * 10. Customer submits form (draft becomes 'pending')
- * 11. /funded endpoint finalizes order
- * 
- * ATTACH ENDPOINT METHOD CASCADE (Priority Order):
- * 1. session: order_awaiting_payment
- * 2. order_key: wc_get_order_id_by_order_key()
- * 3. snap_invoice_number: order meta lookup
- * 4. latest_draft: Blocks-style draft order (checkout-draft status)
- * 5. fallback_recent_snap_order: Last Snap Finance order (ANY status)
- * 
- * Comprehensive Logging Strategy
- * -------------------------------
- * All events logged via snap_orders_log() with these fields:
- * - order_id: WooCommerce order number (may be empty if no order found)
- * - event: attach_attempt, attach_lookup, attach_failed, attach_ok, etc.
- * - source: rest|api|hook (where log originated)
- * - application_id: Snap application ID
- * - invoice_number: Snap transaction ID (WC-prefixed)
- * - progress: Snap progressStatus code (2,6,10,14,18,22,26,30,0,-1)
- * - wc_status: WooCommerce order status (pending, processing, etc.)
- * - method: Payment method (snapfinance_refined)
- * - stage: Journey stage (checkout_loaded, popup_opened, etc.)
- * - note: Additional context (lookup_method, error reasons, etc.)
- * 
- * Key Log Events:
- * - order_created: WooCommerce creates order (hook)
- * - attach_attempt: /attach endpoint called with parameters
- * - attach_lookup: Successfully found order via specific method
- * - attach_lookup_failed: Specific lookup method failed (with reason)
- * - attach_deferred: /attach stored data in session for later (new in v1.0.12)
- * - attach_failed: All lookup methods exhausted, no order found
- * - attach_ok: Successfully attached application to order
- * - attach_via_hook_fallback: Session fallback succeeded during order creation (new in v1.0.12)
- * - order_creation_hook_skipped: Hook skipped (data already attached)
- * - status_polled: Status check performed (diagnostics)
- * - status_ok: Status check successful
- * - funded_start: Finalization started
- * - funded_done: Order finalized and status updated
- * - session_cleared: All Snap session keys cleared after finalize (new in v1.0.12)
- * 
- * Debugging Checklist:
- * --------------------
- * 1. Check WooCommerce → Status → Logs → snap-* files
- * 2. Look for attach_attempt → should show all parameters
- * 3. Check attach_lookup_failed → shows which methods failed and why
- * 4. If attach_failed → no order exists at time of attachment
- * 5. Browser console shows client-side attach attempts with emojis
- * 6. Order notes show: "Snap Finance application started. App ID: X, Snap Invoice: Y, Lookup method: Z"
- * 
- * --------------------------------------------------------------------- */
+/**
+ * Refer to README.md
+ * See sections: Status mapping, Flows (Classic vs Blocks), Attach cascade,
+ * and Logging.
+ */
 
 /** ------------------------------------------------------------------------
  * Unified orders log helper (CSV-style) → source: snap-orders
