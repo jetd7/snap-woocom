@@ -23,6 +23,105 @@ function stableTxHash(tx) {
     });
 }
 
+// Lightweight diagnostics helper (collapsed console groups)
+if (!window.SnapDiag) {
+  (function(){
+    const SNAP_GROUP_TITLE = '[Snap] Checkout Diagnostics';
+    const state = { printedInitial: false, buildId: 0 };
+
+    function getTotalIncVAT() {
+      try {
+        const sel = window.wp?.data?.select('wc/store/cart');
+        const totals = sel?.getCartTotals?.();
+        let total = totals?.total_price ?? totals?.totalPrice ?? totals?.total;
+        if (typeof total === 'string') total = parseFloat(total);
+        if (!isFinite(total) || total === 0) total = window.snap_params?.cart_total ?? 0;
+        return isFinite(total) ? Number(total) : 0;
+      } catch(_) { return window.snap_params?.cart_total ?? 0; }
+    }
+
+    function isEligible(total) {
+      const min = Number(window.snap_params?.min_amount ?? 0);
+      const max = Number(window.snap_params?.max_amount ?? Number.MAX_SAFE_INTEGER);
+      return Number(total) >= min && Number(total) <= max;
+    }
+
+    function mask(str) {
+      if (!str) return '';
+      const s = String(str);
+      if (s.length <= 7) return '•••';
+      return s.slice(0,4) + '…' + s.slice(-3);
+    }
+
+    function computeMerchantRequired() {
+      const defaults = ['billing_first_name','billing_last_name','billing_email','billing_postcode','billing_address_1','billing_city'];
+      const cfg = Array.isArray(window.snap_params?.merchant_required_fields) ? window.snap_params.merchant_required_fields : defaults;
+      return new Set(cfg);
+    }
+
+    function fieldRow(name, value, snapRequiredSet, merchantSet, validationMessages) {
+      const snapReq = snapRequiredSet.has(name);
+      const merchReq = merchantSet.has(name);
+      const requiredBy = snapReq && merchReq ? 'Both' : (snapReq ? 'Snap' : (merchReq ? 'Merchant' : 'Optional'));
+      const msgHit = (validationMessages||[]).find(m => (m||'').toLowerCase().includes(name.replace('billing_','').replace('_',' ')));
+      const valid = !msgHit && (requiredBy === 'Optional' || (String(value||'').trim().length > 0));
+      const notes = msgHit ? msgHit : '';
+      return { field: name, value: value ?? '', required_by: requiredBy, valid, notes, lastUpdated: new Date().toISOString(), buildId: state.buildId };
+    }
+
+    window.SnapDiag = {
+      printInitial() {
+        if (!window.snap_params || window.snap_params.debug_diag !== true) return;
+        if (state.printedInitial) return;
+        try {
+          const plugin = window.__snapDiagMeta?.plugin || window.snap_params?.plugin_version || 'dev';
+          const php = window.__snapDiagMeta?.php || window.snap_params?.php_version || 'unknown';
+          const isBlocks = !!(window.__snapDiagMeta?.isBlocks ?? window.snap_params?.is_blocks);
+          const total = getTotalIncVAT();
+          const eligible = isEligible(total);
+          console.groupCollapsed('%c' + SNAP_GROUP_TITLE, 'color:#0a0; font-weight:bold;');
+          console.table([{ plugin, checkout: (isBlocks ? 'Blocks' : 'Classic'), php, total_inc_vat: Number(total).toFixed(2), eligible }]);
+          state.printedInitial = true;
+        } catch(_) {}
+      },
+      printSnapshot(source) {
+        if (!window.snap_params || window.snap_params.debug_diag !== true) return;
+        try {
+          state.buildId += 1;
+          const tx = window.SnapTransaction?.build?.(window.snap_params) || null;
+          const msgs = (window.SnapTransaction?.validate?.(tx, window.snap_params) || []);
+          const snapRequired = new Set(['billing_first_name','billing_last_name','billing_email','billing_postcode']); // proxy for SDK-required fields
+          const merchantSet = computeMerchantRequired();
+          const rows = [];
+          const f = (n) => window.snap_params?.[n] ?? '';
+          const fieldNames = ['billing_first_name','billing_last_name','billing_email','billing_phone','billing_address_1','billing_address_2','billing_city','billing_postcode'];
+          fieldNames.forEach(n => rows.push(fieldRow(n, f(n), snapRequired, merchantSet, msgs)));
+          rows.push(fieldRow('invoiceNumber', tx?.invoiceNumber, new Set(), new Set(), []));
+          const total = getTotalIncVAT();
+          rows.push(fieldRow('total_inc_vat', Number(total).toFixed(2), new Set(['total_inc_vat']), new Set(['total_inc_vat']), []));
+          rows.push(fieldRow('deliveryDate', tx?.deliveryDate, new Set(), new Set(), []));
+          console.groupCollapsed('[Snap] Transaction snapshot #' + state.buildId + ' (' + (source||'init') + ')');
+          console.table(rows);
+          const snapOk = msgs.length === 0;
+          const merchantFailures = rows.filter(r => r.required_by !== 'Optional' && (r.required_by === 'Merchant' || r.required_by === 'Both') && !r.valid).map(r=>r.field);
+          const merchantOk = merchantFailures.length === 0;
+          console.table([{ snap_required_ok: snapOk, merchant_required_ok: merchantOk, overall_blocked: !(snapOk && merchantOk), reasons: merchantFailures }]);
+          // Application session (if present)
+          try {
+            const app = (window.SnapStorage?.get?.('application')) || null;
+            if (app && (app.id || app.applicationId)) {
+              console.groupCollapsed('[Snap] Application session');
+              console.table([{ applicationId: app.id || app.applicationId, token_masked: mask(app.token), status: app.status || '', submitted: !!app.submitted, lastUpdatedAt: app.lastUpdatedAt || app.lastSubmittedAt || '' }]);
+              console.groupEnd();
+            }
+          } catch(_) {}
+          console.groupEnd();
+        } catch(_) {}
+      }
+    };
+  })();
+}
+
 window.SnapRender = {
     // Module-level flag to ensure SDK is initialized only once per page
     _sdkInitialized: false,
@@ -38,6 +137,7 @@ window.SnapRender = {
     _cancelRequested: false,
     _timeouts: new Set(),
     _sdkLoggerInstalled: false,
+    _domObserver: null,
 
     _trackTimeout(fn, delay) {
         const id = setTimeout(() => {
@@ -152,6 +252,9 @@ window.SnapRender = {
             containerEl.classList.add('snap-container');
             // Add CSS for fade transitions
             containerEl.style.transition = 'opacity 0.2s ease';
+
+            // Install DOM observer to recover from Classic/Blocks DOM swaps (e.g., updated_checkout)
+            try { this._installDomObserver(containerEl); } catch(_) {}
             
             // Defer host preparation until we know a full SDK render is required
 
@@ -365,6 +468,34 @@ window.SnapRender = {
                 this.showError(containerEl, 'Unable to load Snap Finance. Please try again.');
             }
         });
+    },
+
+    /**
+     * Observe container/payment box for DOM swaps and automatically re-render when host disappears
+     */
+    _installDomObserver(containerEl) {
+        try {
+            if (this._domObserver) { try { this._domObserver.disconnect(); } catch(_) {} }
+            const paymentBox = containerEl.closest('.payment_box') || containerEl.parentElement || containerEl;
+            const observer = new MutationObserver((mutations) => {
+                try {
+                    // If container was removed from DOM, bail (outer hooks will recreate)
+                    if (!document.getElementById(CONTAINER_ID)) return;
+                    // If inner host vanished (common on Classic updated_checkout), schedule a re-render
+                    const hostPresent = !!containerEl.querySelector('.snapuk-host');
+                    if (!hostPresent) {
+                        console.log('🔁 Host missing after DOM change → scheduling re-render');
+                        this._trackTimeout(() => {
+                            if (!this._idle && !this._cancelRequested) {
+                                this.render();
+                            }
+                        }, 150);
+                    }
+                } catch(_) {}
+            });
+            observer.observe(paymentBox, { childList: true, subtree: true });
+            this._domObserver = observer;
+        } catch(_) {}
     },
 
     /**
@@ -717,11 +848,12 @@ window.SnapRender = {
                         this._trackTimeout(() => {
                             try {
                                 if (containerEl.dataset.snapPostVerified === '1') return;
-                                const host = document.getElementById('snap-uk-checkout');
-                                const shadow = host?.shadowRoot;
+                                const hostEl = containerEl.querySelector('.snapuk-host') || containerEl;
+                                const shadow = hostEl?.shadowRoot || containerEl.shadowRoot || null;
                                 const btn = shadow?.getElementById('snapuk-checkout-btn') ||
                                             shadow?.querySelector('#snapuk-checkout-btn') ||
-                                            shadow?.querySelector('.snap-checkout-btn');
+                                            shadow?.querySelector('.snap-checkout-btn') ||
+                                            shadow?.querySelector('button');
                                 if (btn) {
                                     containerEl.dataset.snapPostVerified = '1';
                                     // Reveal container now that button exists
@@ -930,7 +1062,8 @@ window.SnapRender = {
         // Wait for the Snap button to be rendered and try multiple selectors
         this._trackTimeout(() => {
             // Check for Shadow DOM first (Snap SDK uses shadow DOM)
-            const shadowRoot = containerEl.shadowRoot;
+            const hostEl = containerEl.querySelector('.snapuk-host');
+            const shadowRoot = hostEl?.shadowRoot || containerEl.shadowRoot || null;
             let snapButton = null;
             
             if (shadowRoot) {
@@ -1058,9 +1191,10 @@ window.SnapRender = {
                     containerEl.querySelector('button') ||
                     containerEl.querySelector('[role="button"]');
         
-        // If not found, try Shadow DOM
+        // If not found, try Shadow DOM (prefer inner host)
         if (!snapButton) {
-            const shadowRoot = containerEl.shadowRoot;
+            const hostEl = containerEl.querySelector('.snapuk-host');
+            const shadowRoot = hostEl?.shadowRoot || containerEl.shadowRoot || null;
             if (shadowRoot) {
                 console.log('🔍 Searching Shadow DOM for Snap button...');
                 snapButton = shadowRoot.querySelector('#snapuk-checkout-btn') ||

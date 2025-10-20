@@ -3,7 +3,7 @@
  * Plugin Name: Snap Finance Payment Gateway
  * Plugin URI:  https://finmatch.co.uk
  * Description: Allow customers to apply for finance through Snap Finance UK (Classic & Blocks).
- * Version:     1.0.12
+ * Version:     1.0.17
  * Author:      FinMatch
  * Author URI:  https://finmatch.co.uk
  * Text Domain: snap-finance-gateway
@@ -23,7 +23,7 @@ if ( ! defined( 'SNAP_FINANCE_PLUGIN_VERSION' ) ) {
         require_once ABSPATH . 'wp-admin/includes/plugin.php';
     }
     $data = function_exists( 'get_file_data' ) ? get_file_data( __FILE__, array( 'Version' => 'Version' ) ) : array();
-    define( 'SNAP_FINANCE_PLUGIN_VERSION', isset( $data['Version'] ) && $data['Version'] ? $data['Version'] : '1.0.12' );
+    define( 'SNAP_FINANCE_PLUGIN_VERSION', isset( $data['Version'] ) && $data['Version'] ? $data['Version'] : '1.0.17' );
 }
 
 /**
@@ -35,6 +35,115 @@ add_action( 'before_woocommerce_init', function() {
         \Automattic\WooCommerce\Utilities\FeaturesUtil::declare_compatibility( 'custom_order_tables', __FILE__, true );
     }
 } );
+
+/** ========================================================================
+ * TERMINOLOGY & LOGGING DOCUMENTATION
+ * ========================================================================
+ * 
+ * IMPORTANT: Understanding Invoice vs Order Numbers
+ * --------------------------------------------------
+ * - "invoice_number" / "Snap Invoice": Generated transaction ID for Snap API
+ *   Format: WC1728405123456 (WC + timestamp + random)
+ *   Purpose: Unique identifier for Snap Finance application/transaction
+ *   Stored in: Order meta "_snap_invoice_number"
+ * 
+ * - "order_id" / "WooCommerce Order": WordPress/WooCommerce post ID
+ *   Format: Integer (e.g., 131703)
+ *   Purpose: WooCommerce's internal order identifier
+ *   Stored in: wp_posts.ID where post_type = 'shop_order'
+ * 
+ * - "application_id" / "App ID": Snap Finance's application identifier
+ *   Format: Integer from Snap API (e.g., 57235001)
+ *   Purpose: Links to Snap's internal application system
+ *   Stored in: Order meta "_snap_application_id"
+ * 
+ * Order Attachment Flow (Classic vs Blocks)
+ * ------------------------------------------
+ * 
+ * KEY DIFFERENCES: Classic vs Blocks Checkout
+ * +--------------------------------+---------------------------+---------------------------+
+ * | Aspect                         | CLASSIC CHECKOUT          | BLOCKS CHECKOUT           |
+ * +--------------------------------+---------------------------+---------------------------+
+ * | Order Creation Timing          | On form submission        | On page load              |
+ * | Draft Order Status             | Never created             | 'checkout-draft'          |
+ * | Session order_awaiting_payment | Usually empty pre-submit  | Contains draft order ID   |
+ * | Primary Attach Method          | snap_invoice_match        | latest_draft              |
+ * +--------------------------------+---------------------------+---------------------------+
+ * Note: Success rates for each method will be populated based on merchant data analysis.
+ * 
+ * CLASSIC CHECKOUT FLOW:
+ * 1. Customer lands on checkout page
+ * 2. Customer fills form fields
+ * 3. Customer selects Snap Finance payment method
+ * 4. Customer clicks Snap button
+ * 5. Snap application created
+ * 6. /attach endpoint attempts to find order (methods 1-5 below)
+ * 7. Customer completes Snap application
+ * 8. Customer submits form
+ * 9. WooCommerce creates order
+ * 10. /funded endpoint finalizes order
+ * 
+ * BLOCKS CHECKOUT FLOW:
+ * 1. Customer lands on checkout page
+ * 2. WooCommerce Blocks creates draft order immediately
+ * 3. Draft order stored in session
+ * 4. Customer fills form (draft order updates in real-time)
+ * 5. Customer selects Snap Finance payment method
+ * 6. Customer clicks Snap button
+ * 7. Snap application created
+ * 8. /attach endpoint finds draft order ✅
+ * 9. Customer completes Snap application
+ * 10. Customer submits form (draft becomes 'pending')
+ * 11. /funded endpoint finalizes order
+ * 
+ * ATTACH ENDPOINT METHOD CASCADE (Priority Order):
+ * 1. session: order_awaiting_payment
+ * 2. order_key: wc_get_order_id_by_order_key()
+ * 3. snap_invoice_number: order meta lookup
+ * 4. latest_draft: Blocks-style draft order (checkout-draft status)
+ * 5. fallback_recent_snap_order: Last Snap Finance order (ANY status)
+ * 
+ * Comprehensive Logging Strategy
+ * -------------------------------
+ * All events logged via snap_orders_log() with these fields:
+ * - order_id: WooCommerce order number (may be empty if no order found)
+ * - event: attach_attempt, attach_lookup, attach_failed, attach_ok, etc.
+ * - source: rest|api|hook (where log originated)
+ * - application_id: Snap application ID
+ * - invoice_number: Snap transaction ID (WC-prefixed)
+ * - progress: Snap progressStatus code (2,6,10,14,18,22,26,30,0,-1)
+ * - wc_status: WooCommerce order status (pending, processing, etc.)
+ * - method: Payment method (snapfinance_refined)
+ * - stage: Journey stage (checkout_loaded, popup_opened, etc.)
+ * - note: Additional context (lookup_method, error reasons, etc.)
+ * 
+ * Key Log Events:
+ * - order_created: WooCommerce creates order (hook)
+ * - attach_attempt: /attach endpoint called with parameters
+ * - attach_lookup: Successfully found order via specific method
+ * - attach_lookup_failed: Specific lookup method failed (with reason)
+ * - attach_deferred: /attach stored data in session for later (new in v1.0.12)
+ * - attach_failed: All lookup methods exhausted, no order found
+ * - attach_ok: Successfully attached application to order
+ * - attach_via_hook_fallback: Session fallback succeeded during order creation (new in v1.0.12)
+ * - order_creation_hook_skipped: Hook skipped (data already attached)
+ * - status_polled: Status check performed (diagnostics)
+ * - status_ok: Status check successful
+ * - funded_start: Finalization started
+ * - funded_done: Order finalized and status updated
+ * - session_cleared: All Snap session keys cleared after finalize (new in v1.0.12)
+ * 
+ * Debugging Checklist:
+ * --------------------
+ * 1. Check WooCommerce → Status → Logs → snap-* files
+ * 2. Look for attach_attempt → should show all parameters
+ * 3. Check attach_lookup_failed → shows which methods failed and why
+ * 4. If attach_failed → no order exists at time of attachment
+ * 5. Browser console shows client-side attach attempts with emojis
+ * 6. Order notes show: "Snap Finance application started. App ID: X, Snap Invoice: Y, Lookup method: Z"
+ * 
+ * --------------------------------------------------------------------- */
+
 /** ------------------------------------------------------------------------
  * Unified orders log helper (CSV-style) → source: snap-orders
  * --------------------------------------------------------------------- */
@@ -341,9 +450,16 @@ if ( ! function_exists( 'snap_add_note' ) ) {
 if ( ! function_exists( 'snap_clear_wc_session_after_finalize' ) ) {
     function snap_clear_wc_session_after_finalize(): void {
         if ( function_exists( 'WC' ) && WC()->session ) {
+            // Clear standard WooCommerce session keys
             WC()->session->__unset( 'order_awaiting_payment' );
             WC()->session->__unset( 'reload_checkout' );
             WC()->session->__unset( 'snap_seeded_order_id' );
+            
+            // Clear ALL Snap session keys (comprehensive cleanup)
+            WC()->session->__unset( 'snap_application' ); // Main application object
+            WC()->session->__unset( 'snap_application_id_pending' ); // Session fallback keys
+            WC()->session->__unset( 'snap_invoice_number_pending' );
+            WC()->session->__unset( 'billing_email' ); // Email cache for REST context
         }
         if ( isset( $_SESSION['snap_seeded_order_id'] ) ) {
             unset( $_SESSION['snap_seeded_order_id'] );
@@ -351,6 +467,14 @@ if ( ! function_exists( 'snap_clear_wc_session_after_finalize' ) ) {
         // Also clear the signed cookie so a future checkout cannot accidentally
         // associate a new draft order with a prior funded application.
         try { snap_clear_signed_cookie( 'snap_seeded_order_id' ); } catch ( Throwable $e ) {}
+        
+        // Log cleanup for debugging
+        try {
+            snap_orders_log( 'session_cleared', array(
+                'source' => 'cleanup',
+                'note' => 'all_snap_session_keys_cleared_after_finalize'
+            ) );
+        } catch ( Throwable $e ) {}
     }
 }
 
@@ -413,7 +537,11 @@ if ( ! function_exists( 'snap_apply_progress_to_order' ) ) {
                 snap_add_note( $order, 'Application requires additional documents.' );
                 break;
 
-            case 26: // PENDING_DEL (signed; awaiting delivery) → note only; no status change
+            case 26: // PENDING_DEL (signed; awaiting delivery)
+                // Promote Blocks draft to a real order, but do not mark paid
+                if ( 'checkout-draft' === $order->get_status() ) {
+                    $order->update_status( 'pending' );
+                }
                 snap_add_note( $order, 'Customer signed; awaiting merchant delivery. Once the customer has received goods/service please confirm in your Snap Merchant Portal for next day payment.' );
                 break;
 
@@ -515,14 +643,34 @@ if ( ! function_exists( 'snap_find_order_by_invoice' ) ) {
     }
 }
 
+/** ------------------------------------------------------------------------
+ * Find latest draft order (primarily for Blocks checkout)
+ * 
+ * BLOCKS CHECKOUT:
+ * - WooCommerce Blocks creates orders with status 'checkout-draft' when 
+ *   the checkout page is loaded
+ * - Draft orders are updated as customer fills the form
+ * - Draft becomes 'pending' when checkout is submitted
+ * - This function has HIGH SUCCESS RATE for Blocks
+ * 
+ * CLASSIC CHECKOUT:
+ * - Classic checkout does NOT create draft orders
+ * - Orders only created when customer submits the form
+ * - This function has VERY LOW SUCCESS RATE for Classic
+ * - Will only succeed if a Blocks draft exists from different session
+ * 
+ * @param float|null $expected_total Optional total to validate against
+ * @return int Order ID if found, 0 otherwise
+ * --------------------------------------------------------------------- */
 if ( ! function_exists( 'snap_find_blocks_draft_order_id' ) ) {
     function snap_find_blocks_draft_order_id( $expected_total = null ) : int {
         try {
+            // Look for latest order with checkout-draft status
             $args = array(
                 'limit'        => 1,
                 'orderby'      => 'date',
                 'order'        => 'DESC',
-                'status'       => array( 'checkout-draft' ),
+                'status'       => array( 'checkout-draft' ), // Blocks-specific status
                 'return'       => 'ids',
             );
             $orders = wc_get_orders( $args );
@@ -530,6 +678,8 @@ if ( ! function_exists( 'snap_find_blocks_draft_order_id' ) ) {
             $order_id = (int) $orders[0];
             $order    = wc_get_order( $order_id );
             if ( ! $order ) { return 0; }
+            
+            // Optional: validate order total matches expected
             if ( null !== $expected_total ) {
                 if ( wc_format_decimal( $order->get_total() ) !== wc_format_decimal( $expected_total ) ) {
                     wc_get_logger()->warning( sprintf( 'Draft order total mismatch; expected %s, found %s (#%d)', $expected_total, $order->get_total(), $order_id ), array( 'source' => 'snap' ) );
@@ -638,44 +788,176 @@ if ( ! function_exists( 'snap_rest_attach_cb' ) ) {
             $app_id  = sanitize_text_field( (string) ( $r->get_param( 'application_id' ) ?? '' ) );
             $invoice = sanitize_text_field( (string) ( $r->get_param( 'invoice_number' ) ?? '' ) );
             $order_key = sanitize_text_field( (string) ( $r->get_param( 'order_key' ) ?? '' ) );
+            
+            // Log attach attempt with all parameters
+            try { 
+                snap_orders_log( 'attach_attempt', array( 
+                    'source' => 'rest', 
+                    'application_id' => $app_id,
+                    'invoice_number' => $invoice,
+                    'order_key' => $order_key ?: '(none)',
+                    'note' => 'Starting order lookup'
+                ) ); 
+            } catch ( Throwable $e ) {}
+            
             if ( $app_id === '' ) {
+                try { snap_orders_log( 'attach_failed', array( 'source' => 'rest', 'note' => 'missing_application_id' ) ); } catch ( Throwable $e ) {}
                 return new WP_REST_Response( array( 'ok' => false, 'reason' => 'missing_application_id' ), 400 );
             }
 
             $order_id = 0;
+            $lookup_method = '';
+            
+            // ========================================================================
+            // ORDER LOOKUP CASCADE - Tries multiple methods in priority order
+            // ========================================================================
+            
+            // Method 1: Session order_awaiting_payment - Primarily for Blocks checkout
             if ( function_exists( 'WC' ) && WC()->session ) {
                 $order_id = (int) ( WC()->session->get( 'order_awaiting_payment' ) ?: 0 );
+                if ( $order_id ) {
+                    $lookup_method = 'session_order_awaiting_payment';
+                    try { snap_orders_log( 'attach_lookup', array( 'source' => 'rest', 'method' => $lookup_method, 'order_id' => (string) $order_id, 'application_id' => $app_id ) ); } catch ( Throwable $e ) {}
+                } else {
+                    try { snap_orders_log( 'attach_lookup_failed', array( 'source' => 'rest', 'method' => 'session_order_awaiting_payment', 'note' => 'session_empty', 'application_id' => $app_id ) ); } catch ( Throwable $e ) {}
+                }
+            } else {
+                try { snap_orders_log( 'attach_lookup_failed', array( 'source' => 'rest', 'method' => 'session_order_awaiting_payment', 'note' => 'wc_session_unavailable', 'application_id' => $app_id ) ); } catch ( Throwable $e ) {}
             }
+            
+            // Method 2: Order key lookup - Used by both Classic and Blocks
             if ( ! $order_id && $order_key !== '' ) {
                 $order_id = (int) wc_get_order_id_by_order_key( $order_key );
+                if ( $order_id ) {
+                    $lookup_method = 'order_key';
+                    try { snap_orders_log( 'attach_lookup', array( 'source' => 'rest', 'method' => $lookup_method, 'order_id' => (string) $order_id, 'order_key' => $order_key, 'application_id' => $app_id ) ); } catch ( Throwable $e ) {}
+                } else {
+                    try { snap_orders_log( 'attach_lookup_failed', array( 'source' => 'rest', 'method' => 'order_key', 'note' => 'no_match', 'order_key' => $order_key, 'application_id' => $app_id ) ); } catch ( Throwable $e ) {}
+                }
             }
+            
+            // Method 3: Snap invoice number lookup - Used by both Classic and Blocks
             if ( ! $order_id && $invoice !== '' ) {
                 $order = snap_find_order_by_invoice( $invoice );
-                if ( $order ) { $order_id = (int) $order->get_id(); }
+                if ( $order ) { 
+                    $order_id = (int) $order->get_id();
+                    $lookup_method = 'snap_invoice_number';
+                    try { snap_orders_log( 'attach_lookup', array( 'source' => 'rest', 'method' => $lookup_method, 'order_id' => (string) $order_id, 'invoice_number' => $invoice, 'application_id' => $app_id ) ); } catch ( Throwable $e ) {}
+                } else {
+                    try { snap_orders_log( 'attach_lookup_failed', array( 'source' => 'rest', 'method' => 'snap_invoice_number', 'note' => 'no_match', 'invoice_number' => $invoice, 'application_id' => $app_id ) ); } catch ( Throwable $e ) {}
+                }
             }
+            
+            // Method 4: Latest draft order - Primarily for Blocks checkout
             if ( ! $order_id ) {
-                // Fallback: latest draft
                 $order_id = snap_find_blocks_draft_order_id( null );
+                if ( $order_id ) {
+                    $lookup_method = 'latest_draft';
+                    try { snap_orders_log( 'attach_lookup', array( 'source' => 'rest', 'method' => $lookup_method, 'order_id' => (string) $order_id, 'application_id' => $app_id ) ); } catch ( Throwable $e ) {}
+                } else {
+                    try { snap_orders_log( 'attach_lookup_failed', array( 'source' => 'rest', 'method' => 'latest_draft', 'note' => 'no_draft_found', 'application_id' => $app_id ) ); } catch ( Throwable $e ) {}
+                }
             }
+            
+            // Method 5: Identifier-based fallback - Primarily for Classic checkout
+            if ( ! $order_id && $invoice !== '' ) {
+                $args = array(
+                    'limit'          => 5, // Check multiple recent orders for invoice match
+                    'return'         => 'objects', // Need full object for meta checks
+                    'payment_method' => 'snapfinance_refined', // HPOS-safe
+                    'orderby'        => 'date',
+                    'order'          => 'DESC',
+                    'status'         => array( 'pending', 'on-hold', 'checkout-draft' ),
+                );
+                
+                // Scope to current customer - CRITICAL for security
+                if ( $customer_id = get_current_user_id() ) {
+                    $args['customer_id'] = $customer_id;
+                } else {
+                    // Get email from session or request (NOT WC()->checkout->get_value in REST context)
+                    $email = null;
+                    if ( function_exists( 'WC' ) && WC()->session ) {
+                        $email = WC()->session->get( 'billing_email' );
+                    }
+                    if ( ! $email && ! empty( $_POST['billing_email'] ) ) {
+                        $email = sanitize_email( wp_unslash( $_POST['billing_email'] ) );
+                    }
+                    if ( $email ) {
+                        $args['billing_email'] = $email;
+                    }
+                }
+                
+                $candidates = wc_get_orders( $args );
+                
+                // Find order matching Snap invoice number (unique identifier)
+                foreach ( $candidates as $candidate_order ) {
+                    $order_invoice = $candidate_order->get_meta( '_snap_invoice_number' );
+                    
+                    if ( $order_invoice === $invoice ) {
+                        $order_id = $candidate_order->get_id();
+                        $lookup_method = 'snap_invoice_match';
+                        try { 
+                            snap_orders_log( 'attach_lookup', array( 
+                                'source' => 'rest', 
+                                'method' => $lookup_method, 
+                                'order_id' => (string) $order_id, 
+                                'application_id' => $app_id,
+                                'invoice_number' => $invoice,
+                                'note' => 'matched_via_snap_invoice_METHOD5'
+                            ) ); 
+                        } catch ( Throwable $e ) {}
+                        break;
+                    }
+                }
+                
+                if ( ! $order_id && ! empty( $candidates ) ) {
+                    try { 
+                        snap_orders_log( 'attach_lookup_failed', array( 
+                            'source' => 'rest', 
+                            'method' => 'identifier_based_fallback', 
+                            'note' => 'customer_matched_but_no_invoice_match',
+                            'application_id' => $app_id,
+                            'invoice_number' => $invoice
+                        ) ); 
+                    } catch ( Throwable $e ) {}
+                } elseif ( ! $order_id ) {
+                    try { 
+                        snap_orders_log( 'attach_lookup_failed', array( 
+                            'source' => 'rest', 
+                            'method' => 'identifier_based_fallback', 
+                            'note' => 'no_customer_orders_found',
+                            'application_id' => $app_id,
+                            'invoice_number' => $invoice
+                        ) ); 
+                    } catch ( Throwable $e ) {}
+                }
+            }
+            
+            // Final check: no order found at all
             if ( ! $order_id ) {
-            // Pragmatic fallback: reuse latest recent Snap order even if terminal (failed/cancelled)
-            // Do NOT upshift status here; just attach meta so finalize can find it later
-            $fallback = wc_get_orders( array(
-                'limit'      => 1,
-                'return'     => 'ids',
-                'meta_key'   => '_payment_method',
-                'meta_value' => 'snapfinance_refined',
-                'orderby'    => 'date',
-                'order'      => 'DESC',
-                'status'     => array( 'failed', 'cancelled', 'pending', 'on-hold', 'processing' ),
-            ) );
-            if ( ! empty( $fallback ) ) {
-                $order_id = (int) $fallback[0];
-                try { snap_orders_log( 'attach_fallback_recent', array( 'source' => 'rest', 'order_id' => (string) $order_id, 'application_id' => $app_id ) ); } catch ( Throwable $e ) {}
-            }
-        }
-        if ( ! $order_id ) {
-            return new WP_REST_Response( array( 'ok' => false, 'reason' => 'no_order_found' ), 200 );
+                // Store in session as fallback for order creation hook
+                if ( function_exists( 'WC' ) && WC()->session ) {
+                    WC()->session->set( 'snap_application_id_pending', $app_id );
+                    WC()->session->set( 'snap_invoice_number_pending', $invoice );
+                    try { 
+                        snap_orders_log( 'attach_deferred', array( 
+                            'source' => 'rest', 
+                            'application_id' => $app_id,
+                            'invoice_number' => $invoice,
+                            'note' => 'no_order_found_stored_in_session_for_creation_hook'
+                        ) ); 
+                    } catch ( Throwable $e ) {}
+                } else {
+                    try { 
+                        snap_orders_log( 'attach_failed', array( 
+                            'source' => 'rest', 
+                            'application_id' => $app_id,
+                            'invoice_number' => $invoice,
+                            'note' => 'no_order_found_no_session'
+                        ) ); 
+                    } catch ( Throwable $e ) {}
+                }
+                return new WP_REST_Response( array( 'ok' => false, 'reason' => 'no_order_found', 'deferred' => true ), 200 );
             }
 
             $order = wc_get_order( $order_id );
@@ -690,9 +972,15 @@ if ( ! function_exists( 'snap_rest_attach_cb' ) ) {
             $app_ids = (array) $order->get_meta( '_snap_application_ids' );
             $app_ids[] = $app_id;
             $order->update_meta_data( '_snap_application_ids', array_values( array_unique( $app_ids ) ) );
+            // Enforce lock: if order already locked to a different signed app, reject
+            $locked_app = (string) $order->get_meta( '_snap_signed_lock_app_id' );
+            if ( $locked_app && $locked_app !== $app_id ) {
+                try { snap_orders_log( 'attach_failed', array( 'source' => 'rest', 'order_id' => (string) $order_id, 'application_id' => $app_id, 'note' => 'order_locked_signed' ) ); } catch ( Throwable $e ) {}
+                return new WP_REST_Response( array( 'ok' => false, 'reason' => 'order_locked_signed' ), 423 );
+            }
             $order->update_meta_data( '_snap_application_id', $app_id );
             // Do not promote draft to pending on attach; status changes only on funded/complete
-            $order->add_order_note( sprintf( 'Snap application started (App %s).', $app_id ) );
+            $order->add_order_note( sprintf( 'Snap Finance application started. App ID: %s, Snap Invoice: %s, Lookup method: %s', $app_id, $invoice, $lookup_method ) );
             $order->save();
 
             if ( function_exists( 'WC' ) && WC()->session ) {
@@ -709,10 +997,11 @@ if ( ! function_exists( 'snap_rest_attach_cb' ) ) {
                     'invoice_number' => $invoice,
                     'wc_status'      => $order->get_status(),
                     'method'         => $order->get_payment_method(),
+                    'note'           => 'lookup_via_' . $lookup_method,
                 ) );
             } catch ( Throwable $e ) {}
 
-            return new WP_REST_Response( array( 'ok' => true, 'order_id' => (int) $order_id ), 200 );
+            return new WP_REST_Response( array( 'ok' => true, 'order_id' => (int) $order_id, 'lookup_method' => $lookup_method ), 200 );
         } catch ( Throwable $e ) {
             return new WP_REST_Response( array( 'ok' => false, 'reason' => 'attach_exception' ), 500 );
         }
@@ -795,6 +1084,11 @@ function snap_rest_funded_cb( WP_REST_Request $request ) {
                 } else {
                 snap_apply_progress_to_order( $seeded_order, (int) $progress, [ 'application_id' => $app_id, 'invoice_number' => (string) $invoice_number ] );
                 }
+                // Lock order to this application once signed/funded/complete
+                if ( in_array( (int) $progress, array( 26, 0, 30 ), true ) ) {
+                    $seeded_order->update_meta_data( '_snap_signed_lock_app_id', (string) $app_id );
+                    $seeded_order->save();
+                }
                 if ( function_exists( 'WC' ) && WC()->cart ) { WC()->cart->empty_cart( false ); }
                 snap_clear_wc_session_after_finalize();
                 try { snap_orders_log( 'funded_done', array( 'source' => 'rest', 'order_id' => (string) $seeded_order->get_id(), 'application_id' => $app_id, 'progress' => (string) $progress, 'wc_status' => $seeded_order->get_status(), 'method' => $seeded_order->get_payment_method() ) ); } catch ( Throwable $e ) {}
@@ -867,6 +1161,11 @@ function snap_rest_funded_cb( WP_REST_Request $request ) {
                 $order->save();
             } else {
                 snap_apply_progress_to_order( $order, (int) $progress, [ 'application_id' => $app_id, 'invoice_number' => (string) $invoice_number ] );
+            }
+            // Lock order to this application once signed/funded/complete
+            if ( in_array( (int) $progress, array( 26, 0, 30 ), true ) ) {
+                $order->update_meta_data( '_snap_signed_lock_app_id', (string) $app_id );
+                $order->save();
             }
             if ( function_exists( 'WC' ) && WC()->cart ) { WC()->cart->empty_cart( false ); }
             snap_clear_wc_session_after_finalize();
@@ -958,7 +1257,45 @@ if ( ! function_exists( 'snap_rest_status_cb' ) ) {
         if ( $code !== 200 || ! is_array( $body ) || ! isset( $body['progressStatus'] ) ) {
             return new WP_REST_Response( array( 'ok' => false, 'error' => 'bad_response', 'http' => $code, 'body' => $body ), 502 );
         }
-        try { snap_orders_log( 'status_polled', array( 'source' => 'api', 'application_id' => $app_id, 'progress' => (string) (int) $body['progressStatus'] ) ); } catch ( Throwable $e ) {}
+        
+        // Try to find associated order for logging context
+        $order_id_for_log = '';
+        try {
+            // Check session first
+            if ( function_exists( 'WC' ) && WC()->session ) {
+                $session_order_id = (int) ( WC()->session->get( 'snap_seeded_order_id' ) ?: 0 );
+                if ( $session_order_id > 0 ) {
+                    $order_id_for_log = (string) $session_order_id;
+                }
+            }
+            // Fallback: lookup by application_id meta
+            if ( ! $order_id_for_log && $app_id !== '' ) {
+                $found = wc_get_orders( array(
+                    'limit'      => 1,
+                    'return'     => 'ids',
+                    'meta_key'   => '_snap_application_id',
+                    'meta_value' => $app_id,
+                    'orderby'    => 'date',
+                    'order'      => 'DESC',
+                ) );
+                if ( ! empty( $found ) ) {
+                    $order_id_for_log = (string) $found[0];
+                }
+            }
+        } catch ( Throwable $e ) {}
+        
+        try {
+            // Record optional trigger method from querystring for analytics (e.g., callback:onApproved, url:approved)
+            $method = (string) ( $request->get_param( 'method' ) ?? '' );
+            snap_orders_log( 'status_polled', array(
+                'source'        => 'api',
+                'order_id'      => $order_id_for_log,
+                'application_id'=> $app_id,
+                'progress'      => (string) (int) $body['progressStatus'],
+                'method'        => $method
+            ) );
+        } catch ( Throwable $e ) {}
+        
         return new WP_REST_Response( array( 'ok' => true, 'application_id' => $app_id, 'progress_status' => (int) $body['progressStatus'], 'payload' => $body ), 200 );
     }
 }
@@ -1065,12 +1402,67 @@ if ( ! function_exists( 'snap_rest_journey_cb' ) ) {
     }
 }
 
-
-if ( function_exists( 'snap_rest_funded_cb' ) ) {
+/** ------------------------------------------------------------------------
+ * Attach Snap Finance data during order creation (fallback)
+ * If /attach endpoint didn't find an order, this hook ensures data is saved
+ * Applies to both Classic and Blocks checkout
+ * --------------------------------------------------------------------- */
+add_action( 'woocommerce_checkout_create_order', function( $order, $data ) {
+    // Only process Snap Finance orders
+    if ( $order->get_payment_method() !== 'snapfinance_refined' ) {
+        return;
+    }
     
-}
-
-
+    // Check if order already has application_id (from successful /attach)
+    $existing_app_id = $order->get_meta( '_snap_application_id' );
+    if ( $existing_app_id ) {
+        // /attach already succeeded, nothing to do
+        try {
+            snap_orders_log( 'order_creation_hook_skipped', array(
+                'source' => 'hook',
+                'order_id' => (string) $order->get_id(),
+                'application_id' => $existing_app_id,
+                'note' => 'data_already_attached_via_rest'
+            ) );
+        } catch ( Throwable $e ) {}
+        return;
+    }
+    
+    // Fallback: pull from session if /attach failed
+    if ( ! function_exists( 'WC' ) || ! WC()->session ) {
+        return;
+    }
+    
+    $app_id = WC()->session->get( 'snap_application_id_pending' );
+    $invoice = WC()->session->get( 'snap_invoice_number_pending' );
+    
+    if ( $app_id ) {
+        // Attach data from session
+        $order->update_meta_data( '_snap_application_id', $app_id );
+        if ( $invoice ) {
+            $order->update_meta_data( '_snap_invoice_number', $invoice );
+        }
+        $order->add_order_note( sprintf( 
+            'Snap Finance application attached via session fallback. App ID: %s, Snap Invoice: %s', 
+            $app_id, 
+            $invoice 
+        ) );
+        
+        try {
+            snap_orders_log( 'attach_via_hook_fallback', array(
+                'source' => 'hook',
+                'order_id' => (string) $order->get_id(),
+                'application_id' => $app_id,
+                'invoice_number' => $invoice,
+                'note' => 'session_fallback_succeeded'
+            ) );
+        } catch ( Throwable $e ) {}
+        
+        // Clear session data after successful attachment
+        WC()->session->__unset( 'snap_application_id_pending' );
+        WC()->session->__unset( 'snap_invoice_number_pending' );
+    }
+}, 10, 2 );
 
 /** ------------------------------------------------------------------------
  * Settings link in Plugins screen

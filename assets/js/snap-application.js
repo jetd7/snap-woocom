@@ -87,6 +87,11 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
             if (h && known.some(k => h.startsWith(k))) {
               const stage = known.find(k => h.startsWith(k));
               postJourney(stage);
+              // NEW: when reaching 'build-your-loans/approved', poll server status once to capture 6 (approved)
+              if (stage === 'build-your-loans/approved' && !window.__snapUrlApprovedPolled) {
+                window.__snapUrlApprovedPolled = true;
+                try { window.SnapApplication?.logServerStatus?.(appId, token, 'url:approved'); } catch(_) {}
+              }
               if (stage === 'denied') {
                 try { window.SnapApplication?.onDenied?.(appId, token); } catch(_) {}
               }
@@ -148,6 +153,8 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
       try {
         const params = new URLSearchParams({ application_id: appId });
         if (token) params.set('bearer', token);
+        // Include lightweight context for server log method column
+        if (context) params.set('method', context);
         const url = '/wp-json/snap/v1/status?' + params.toString();
         const res = await fetch(url, { method: 'GET', headers: { 'X-WP-Nonce': window.snap_params?.rest_nonce || window.snap_params?.restNonce || window.wpApiSettings?.nonce || '' }, credentials: 'same-origin' });
         const data = await res.json().catch(() => null);
@@ -339,15 +346,41 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
         try {
           const nonce = window.snap_params?.rest_nonce || window.snap_params?.restNonce || window.wpApiSettings?.nonce || '';
           const orderKey = (window?.wc && wc.orderKey) || (window?.wc_checkout_params && wc_checkout_params.order_key) || null;
+          const snapInvoice = window.snap_params?.transaction?.invoiceNumber || null;
+          const attachPayload = { application_id: appId, invoice_number: snapInvoice, order_key: orderKey };
+          
+          console.log('[Snap] 🔗 Attempting to attach application to order:', {
+            app_id: appId,
+            snap_invoice: snapInvoice,
+            order_key: orderKey || '(none)',
+            note: 'This is Snap transaction ID, NOT WooCommerce order number'
+          });
+          
           fetch('/wp-json/snap/v1/attach', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-WP-Nonce': nonce },
             credentials: 'same-origin',
-            body: JSON.stringify({ application_id: appId, invoice_number: (window.snap_params?.transaction?.invoiceNumber || null), order_key: orderKey })
+            body: JSON.stringify(attachPayload)
           })
-          .then(r => r.json()).then(j => { if (!j?.ok) console.warn('[Snap] attach failed', j); else console.log('[Snap] attach ok', j); })
-          .catch(e => console.warn('[Snap] attach exception', e));
-        } catch(_) {}
+          .then(r => r.json()).then(j => { 
+            if (!j?.ok) {
+              console.error('[Snap] ❌ attach failed:', { 
+                reason: j.reason, 
+                response: j,
+                note: 'Check WooCommerce logs for attach_failed entries'
+              }); 
+            } else {
+              console.log('[Snap] ✅ attach successful:', { 
+                order_id: j.order_id, 
+                lookup_method: j.lookup_method,
+                response: j 
+              });
+            }
+          })
+          .catch(e => console.error('[Snap] ❌ attach network exception:', e));
+        } catch(e) {
+          console.error('[Snap] ❌ attach setup exception:', e);
+        }
 
         // Start URL watcher so we can detect both success and denied routes
         try { __startUrlCompletionWatcher(appId, token, (id, tk) => this.onSuccess(id, tk)); } catch(_) {}
@@ -368,6 +401,10 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
         this.setApp({ id: appId, token: token, status: 'approved' });
         // ensure blocking is active
         this.blockCheckoutSubmission();
+      // NEW: Poll server status immediately to capture progress 6 (approved) in logs
+      try { this.logServerStatus(appId, token, 'callback:onApproved'); } catch(_) {}
+      // Optional brief re-poll to catch fast transitions 6→26
+      setTimeout(() => { try { this.logServerStatus(appId, token, 'callback:onApproved+1s'); } catch(_) {} }, 1000);
         // Start URL-based sandbox fallback watcher immediately
         __startUrlCompletionWatcher(appId, token, (id, tk) => this.onSuccess(id, tk));
       } catch (e) { console.error(e); }
@@ -673,6 +710,47 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
     },
 
     /**
+     * Show guidance with action links (Resume / Start new)
+     */
+    showInlineGuidance(message, options = {}) {
+      try {
+        const snapContainer = document.querySelector('#snap-uk-checkout') || 
+                             document.querySelector('.snap-container') ||
+                             document.querySelector('[data-gateway="snapfinance_refined"]');
+        if (!snapContainer) return this.showInlineMessage(message, 'info');
+        const wrapper = document.createElement('div');
+        wrapper.id = `snap-inline-guidance-${Date.now()}`;
+        wrapper.innerHTML = `
+          <div style="background:#f8f9fb;border:1px solid #cbd5e1;border-radius:6px;padding:12px;margin:10px 0;font-size:14px;">
+            <div style="margin-bottom:8px;">ℹ️ ${message}</div>
+            <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+              <button type="button" id="snap-resume-btn" style="background:#111;color:#fff;border:0;border-radius:4px;padding:8px 10px;cursor:pointer;">Resume Snap application</button>
+              <a href="#" id="snap-new-app-link" style="font-size:13px;color:#0a66c2;text-decoration:underline;">Start a new application</a>
+            </div>
+          </div>
+        `;
+        snapContainer.parentNode.insertBefore(wrapper, snapContainer);
+        const resume = wrapper.querySelector('#snap-resume-btn');
+        const anew  = wrapper.querySelector('#snap-new-app-link');
+        if (resume) resume.addEventListener('click', () => {
+          try {
+            // Best-effort: click the existing Snap button to resume
+            const btn = document.querySelector('#snap-uk-checkout button, [data-snap-check-eligibility], .snap-container button');
+            if (btn) { btn.click(); }
+            else { this.showInlineMessage('Open the email from Snap to continue signing.', 'info'); }
+          } catch(_) { this.showInlineMessage('Open the email from Snap to continue signing.', 'info'); }
+        });
+        if (anew) anew.addEventListener('click', (e) => {
+          e.preventDefault();
+          if (!confirm('This will abandon the current Snap application and start a new one. Continue?')) return;
+          try { this.resetApplicationStatus(); } catch(_) {}
+          try { this.allowCheckoutSubmission(); } catch(_) {}
+          this.showInlineMessage('You can now start a new Snap application using Check eligibility.', 'success');
+        });
+      } catch(_) {}
+    },
+
+    /**
      * Clear all inline messages
      */
     clearInlineMessages() {
@@ -763,4 +841,26 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
 
   // Thank-you cleanup: run at load in case user lands here directly
   try { window.SnapApplication?.detectAndCleanupOnThankYou?.(); } catch(_) {}
+
+  // On checkout load: if a Snap app exists and is not signed, poll status and show guidance
+  try {
+    const app = window.SnapStorage?.get?.('application');
+    if (app && app.id && app.status !== 'success' && app.submitted !== true) {
+      window.SnapApplication?.logServerStatus?.(app.id, app.token, 'returnCheck').then((data) => {
+        if (!data || !data.ok) return;
+        const p = Number(data.progress_status);
+        if (p === 6) {
+          window.SnapApplication?.showInlineGuidance?.('Approved — please finish signing in the Snap popup, or check your email for your agreement.');
+        } else if (p === 10) {
+          window.SnapApplication?.showInlineGuidance?.('Approved with conditions — additional steps/signing may be required in the Snap popup, or check your email for the link to continue.');
+        } else if (p === 22) {
+          window.SnapApplication?.showInlineGuidance?.('Documents required — please upload the requested documents in the Snap popup, or check your email for the link to continue.');
+        } else if (p === 14) {
+          window.SnapApplication?.showInlineMessage?.('Snap is unavailable due to a declined application. You can try again with Check eligibility.', 'warning');
+        } else if (p === 18) {
+          window.SnapApplication?.showInlineMessage?.('Application withdrawn — you can start a new application or choose another payment method.', 'info');
+        }
+      }).catch(()=>{});
+    }
+  } catch(_) {}
 })();

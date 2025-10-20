@@ -26,6 +26,7 @@ class WC_Snap_Finance_Gateway extends WC_Payment_Gateway {
     public $testmode;
     public $merchant_id;
     public $client_id;
+    public $debug_diag;
 
     public function __construct() {
         $this->id                 = 'snapfinance_refined';
@@ -55,6 +56,7 @@ class WC_Snap_Finance_Gateway extends WC_Payment_Gateway {
         $this->button_theme           = $this->get_option( 'button_theme', 'DARK' );
         $this->testmode               = 'yes' === $this->get_option( 'testmode', 'yes' );
         $this->enabled                = $this->get_option( 'enabled', 'no' );
+        $this->debug_diag             = 'yes' === $this->get_option( 'debug_diag', 'no' );
         
         // Debug logging for gateway status
         error_log('SNAP GATEWAY: Constructor - enabled=' . $this->enabled . ' testmode=' . ($this->testmode ? 'yes' : 'no'));
@@ -94,8 +96,7 @@ class WC_Snap_Finance_Gateway extends WC_Payment_Gateway {
         add_action( 'wp_ajax_nopriv_snap_set_chosen', array( $this, 'ajax_set_chosen_method' ) );
 		// Removed insecure finalize AJAX endpoint; rely on secured REST route instead
 
-        // [REMOVED] Hiding gateway by total; see the new method below which is now a no-op
-        add_filter( 'woocommerce_available_payment_gateways', array( $this, 'restrict_payment_methods_by_cart_total' ) );
+        // Hiding by total handled via is_available() (Classic) and is_active() (Blocks)
 
         // Ensure the container renders even if some theme overrides descriptions
         add_filter( 'woocommerce_gateway_description', function( $description, $gateway_id ) {
@@ -190,6 +191,14 @@ class WC_Snap_Finance_Gateway extends WC_Payment_Gateway {
                 'type'    => 'select',
                 'options' => array( 'DARK' => 'Dark', 'LIGHT' => 'Light' ),
                 'default' => 'DARK',
+            ),
+            'debug_diag' => array(
+                'title'       => 'Enable diagnostics (console)',
+                'type'        => 'checkbox',
+                'label'       => 'Print diagnostics tables in browser console',
+                'default'     => 'no',
+                'desc_tip'    => true,
+                'description' => 'When enabled (or when Test Mode is on), a collapsed diagnostics group is printed to the browser console with summary and validation snapshots.'
             ),
             // Min/max amounts removed from admin - using Snap's fixed limits
             // Minimum: £250, Maximum: £10,000 (hardcoded for business compliance)
@@ -324,6 +333,10 @@ class WC_Snap_Finance_Gateway extends WC_Payment_Gateway {
             'nonce'        => wp_create_nonce( 'snap_finance_nonce' ),
             'rest_nonce'   => wp_create_nonce( 'wp_rest' ),
             'rest_url'     => esc_url_raw( rest_url( 'snap/v1/funded' ) ),
+            // Expose PHP version for diagnostics
+            'php_version'  => PHP_VERSION,
+            // Diagnostics toggle (on if setting enabled or when test mode is active)
+            'debug_diag'   => (bool) ( $this->debug_diag || $this->testmode ),
             'client_id'    => $this->client_id,
             'merchant_id'  => $this->merchant_id,
             'button_theme' => $this->button_theme ?: 'DARK',
@@ -416,17 +429,14 @@ class WC_Snap_Finance_Gateway extends WC_Payment_Gateway {
             true
         );
 
-        // Diagnostic: confirm snap_params exists when this runs.
+        // Seed diagnostics meta and schedule initial diagnostics printing once SnapDiag is available
         wp_add_inline_script(
             'snap-render',
-            'console.log("SNAP DEBUG: snap_params localized?", typeof window.snap_params);',
-            'after'
-        );
-        
-        // Debug billing fields
-        wp_add_inline_script(
-            'snap-render',
-            'console.log("SNAP DEBUG: Billing fields:", { firstName: window.snap_params?.billing_first_name, lastName: window.snap_params?.billing_last_name, email: window.snap_params?.billing_email, phone: window.snap_params?.billing_phone, postcode: window.snap_params?.billing_postcode });',
+            'window.__snapDiagMeta = Object.assign({}, (window.__snapDiagMeta||{}), { plugin: window.snap_params?.plugin_version, php: window.snap_params?.php_version, isBlocks: !!window.snap_params?.is_blocks });
+             (function waitDiag(){
+               if (window.SnapDiag && typeof window.SnapDiag.printInitial === "function") { try { window.SnapDiag.printInitial(); } catch(e) {} return; }
+               setTimeout(waitDiag, 100);
+             })();',
             'after'
         );
 
@@ -666,12 +676,7 @@ class WC_Snap_Finance_Gateway extends WC_Payment_Gateway {
         wp_send_json_success();
     }
 
-    /**
-     * No-op: Hiding occurs via is_available()/Blocks is_active() using shared limits.
-     */
-    public function restrict_payment_methods_by_cart_total( $available_gateways ) { // [MODIFIED]
-        return $available_gateways; // keep visible; frontend displays min/max notice
-    }
+    
 
     /**
      * Add custom CSS to remove unwanted styling from Snap button container

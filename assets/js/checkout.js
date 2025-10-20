@@ -7,7 +7,7 @@
 
 jQuery(document).ready(function($) {
     'use strict';
-    
+    console.groupCollapsed('[Snap] Classic Init');
     console.log('🔧 Snap Finance Classic Checkout Handler Loaded');
     console.log('🔧 Page load time:', new Date().toISOString());
     
@@ -197,19 +197,25 @@ jQuery(document).ready(function($) {
         // Listen for WooCommerce checkout updates (CRITICAL for shipping toggle, cart updates, etc.)
         $(document.body).on('updated_checkout', function() {
             console.log('🔄 WooCommerce checkout updated - re-checking Snap Finance');
-            
-            // Check if Snap Finance is still selected
+
             const selectedMethod = $('input[name="payment_method"]:checked').val();
             console.log('🔧 Checkout update - selected method:', selectedMethod);
-            
+
             if (selectedMethod === 'snapfinance_refined') {
-                console.log('💰 Snap Finance selected after checkout update - ensuring container and re-rendering');
-                
+                // Always re-show Snap payment box; Woo often hides/rebuilds it
+                $('.payment_box').hide();
+                $('.payment_box.payment_method_snapfinance_refined').show();
+
                 // Ensure container exists (it might have been removed during AJAX update)
                 const container = ensureSnapContainer();
                 if (container) {
                     console.log('✅ Container ensured after checkout update');
-                    debouncedRender();
+                    // Immediate render (no debounce) to recover quickly after shipping toggle
+                    if (window.SnapRender && window.SnapRender.render) {
+                        window.SnapRender.render();
+                    } else {
+                        console.warn('⚠️ SnapRender not available during updated_checkout');
+                    }
                 } else {
                     console.warn('⚠️ Failed to ensure container after checkout update');
                 }
@@ -385,6 +391,27 @@ jQuery(document).ready(function($) {
     // Initialize when document is ready
     init();
     
+    // Classic-only: observe the payment box for DOM swaps and recover the host/container
+    (function setupClassicObserver(){
+        try {
+            const paymentBox = document.querySelector('.payment_box.payment_method_snapfinance_refined') || document.querySelector('.payment_method_snapfinance_refined');
+            if (!paymentBox) return;
+            const observer = new MutationObserver((mutations) => {
+                // If our container is missing while Snap is selected, recreate and re-render
+                const isSnapSelected = window.PaymentMethodDetector?.isSnapFinanceSelected?.() || ($('input[name="payment_method"]').filter(':checked').val() === 'snapfinance_refined');
+                const container = document.getElementById('snap-uk-checkout');
+                if (isSnapSelected && (!container || !container.isConnected)) {
+                    console.log('🔁 Classic observer: container missing → recreating and rendering');
+                    const el = ensureSnapContainer();
+                    if (el && window.SnapRender && window.SnapRender.render) {
+                        window.SnapRender.render();
+                    }
+                }
+            });
+            observer.observe(paymentBox, { childList: true, subtree: true });
+        } catch (_) {}
+    })();
+
     // Additional safety check after a longer delay
     setTimeout(() => {
         const selectedMethod = $('input[name="payment_method"]:checked').val();
@@ -393,4 +420,5 @@ jQuery(document).ready(function($) {
             go();
         }
     }, 2000);
+    console.groupEnd();
 });

@@ -1,4 +1,4 @@
-## Snap Finance WooCommerce Plugin (v1.0.12)
+## Snap Finance WooCommerce Plugin (v1.0.17)
 
 Production-ready Snap Finance UK gateway for WooCommerce (Classic & Blocks). Designed for clarity, security, and a clean user journey.
 
@@ -29,7 +29,7 @@ Production-ready Snap Finance UK gateway for WooCommerce (Classic & Blocks). Des
 | 14 | DENIED | failed | Customer was declined by Snap. Try another lender or payment method. Customer can apply again in 30 days. | No | Blocked; choose another method |
 | 18 | WITHDRAWN | cancelled | Application withdrawn by customer. | No | Blocked; can restart |
 | 22 | PENDING_DOCS | processing | Application requires additional documents. | No | Stays on checkout; upload docs/sign |
-| 26 | PENDING_DEL (signed) | no change | Customer signed; awaiting merchant delivery. Confirm in Snap Merchant Portal for next day payment. | Yes | Redirect to order confirmation; order not marked paid |
+| 26 | PENDING_DEL (signed) | no change | Customer signed; awaiting merchant delivery. Confirm in Snap Merchant Portal for next day payment. | Yes | Redirect to order confirmation; order not marked paid; order is locked to this application |
 | 30 | COMPLETE | completed (and paid) | Snap lifecycle complete. | Yes | Redirect to order confirmation; order marked completed/paid |
 | -1 | ERROR/UNKNOWN | on‑hold | Snap returned an error or unknown status. Manual check required. | No | Blocked; guidance shown |
 | 0 | FUNDED | paid (ensure processing) | Funded. Payment complete. | Yes | Redirect to order confirmation; order marked paid |
@@ -38,6 +38,7 @@ Production-ready Snap Finance UK gateway for WooCommerce (Classic & Blocks). Des
 - REST nonces required; no unauthenticated finalise. No order creation during finalise.
 - Redirects only for 26/0/30; UI never fallbacks to submit if finalise is not ready.
 - Post‑finalise cleanup clears session/cookie/client storage to prevent reuse.
+- Order‑level lock: Once signed/funded/complete, `_snap_signed_lock_app_id` prevents any different application attaching to the same order.
 
 ### Logging (concise)
 - Woo log source `snap`: `order_created`, `attach_ok`, `status_ok/polled`, `funded_start/done`, `funded_no_redirect`, `funded_fetch_failed`, `journey`.
@@ -48,7 +49,7 @@ Production-ready Snap Finance UK gateway for WooCommerce (Classic & Blocks). Des
 |---|---|---|
 | order_created | On Woo order creation | order_id, wc_status, method |
 | attach_ok | App ID attached to draft order | order_id, application_id, invoice_number, wc_status, method |
-| status_ok / status_polled | Server status check succeeded | application_id, progress |
+| status_ok / status_polled | Server status check succeeded | application_id, progress, method (callback:onApproved, url:approved, etc.) |
 | funded_start | Finalise started for an order | order_id, application_id, progress, wc_status, method |
 | funded_done | Finalise applied to order | order_id, application_id, progress, wc_status, method |
 | funded_no_redirect | Non‑funded state → no thank‑you URL | order_id, application_id, progress, note |
@@ -215,6 +216,17 @@ snap-finance-payment-V2.2/
 4. **Customer clicks button** → Snap Finance application modal opens
 5. **Application completed** → Data saved via AJAX
 6. **Order placed** → WooCommerce Blocks processes with Snap Finance data
+
+### Return-to-checkout guidance (when user closes popup or returns via link)
+
+| Status | Message | Actions |
+|---|---|---|
+| 6 APPROVED | Approved — please finish signing in the Snap popup, or check your email for your agreement. | Resume Snap application; Start a new application (confirm) |
+| 10 APPROVED_WITH_CONDITIONS | Approved with conditions — additional steps/signing may be required in the Snap popup, or check your email for the link to continue. | Resume; Start new (confirm) |
+| 22 PENDING_DOCS | Documents required — please upload the requested documents in the Snap popup, or check your email for the link to continue. | Resume; Start new (confirm) |
+| 14 DENIED | Snap is unavailable due to a declined application. You can try again with Check eligibility. | Check eligibility (new app) |
+| 18 WITHDRAWN | Application withdrawn — you can start a new application or choose another payment method. | Check eligibility (new app) |
+| 26/0/30 Signed/Funded/Complete | This order already has a signed Snap application. Please start a new order to apply again. | Cart is empty; add items to start a new order |
 
 ## 🔄 UPDATED COMPREHENSIVE SNAP FINANCE PLUGIN FLOW (Chronological)
 
@@ -449,16 +461,75 @@ CREATE TABLE wp_snap_application_details (
 ---
 
 ## 📝 **Changelog**
+### v1.0.14 (2025-10-19)
+### v1.0.15 (2025-10-20)
+### v1.0.16 (2025-10-20)
+
+Maintenance:
+- Version alignment only (header/constant/README). No functional changes from 1.0.15.
+
+### v1.0.17 (2025-10-20)
+
+Enhancements:
+- Classic: More robust button rendering under DOM swaps (shipping toggle, address, coupons). Generic re-render hooks and inner host shadow-root detection.
+- Generic: Renderer MutationObserver detects loss of inner host and re-renders (also protects Blocks when coupons/React remounts occur).
+
+
+Enhancements and fixes:
+- Classic rendering reliability: shadow-root detection now prefers the inner `.snapuk-host` before falling back to `#snap-uk-checkout`. Prevents long retry loops and ensures overlay/click guard attach.
+- Status 26 behavior updated: promote Blocks `checkout-draft` → `pending` on signed (no payment change). Redirect gating unchanged.
+- Version alignment in code and README.
+
+
+Enhancements:
+- Order lock on signed/funded/complete: set `_snap_signed_lock_app_id` to prevent different application IDs attaching to the same order.
+- Redirect gating: server returns `order_received_url` only for 26/0/30 (or already paid); client never UI‑fallback submits when absent.
+- Status polling for APPROVED (6): poll `/status` on `onApproved` and once on URL stage `build-your-loans/approved`; logs include `method` tag (callback/url).
+- Diagnostics toggle: admin checkbox sends `snap_params.debug_diag` to enable/disable console diagnostics; summary tables added pre‑SDK.
+- Return‑to‑checkout guidance: inline “Resume Snap application / Start a new application” for 6/10/22; declined/withdrawn messages.
+- SDK SVG sizing guard: explicit host dimensions and post‑render SVG width/height pin to avoid `attribute height: Expected length, "undefined"`.
+
+
+### v1.0.13 (2025-10-10)
+
+**Critical Fix:**
+- Replaced time-based Method 5 logic with identifier-based matching using Snap invoice numbers
+- Method 5 now matches orders by unique Snap invoice number instead of arbitrary time window
+- Eliminates brittle 5-minute timer that could fail with document uploads or slow customers
+- Works reliably regardless of how long customer takes to complete Snap application
 
 ### v1.0.12 (2025-10-08)
+
 **Fixed:**
 - Classic checkout: Added `updated_checkout` event handler to ensure Snap button persists when WooCommerce AJAX updates occur (e.g., toggling "Ship to different address" checkbox, changing shipping methods, applying coupons)
-- Blocks checkout: Already has proper reactive handling via `wp.data.subscribe()` - no changes needed
+- Order attachment: Made Method 5 identifier-based using Snap invoice number matching to prevent wrong customer attachment
+- Added session fallback mechanism when no order exists at attachment time
+
+**Enhanced:**
+- Comprehensive attach logging: Now logs each lookup method attempt with success/failure reasons
+- Session cleanup: All Snap session keys now cleared after finalization
+- HPOS compatibility: Updated queries to use `payment_method` parameter instead of meta queries
+- Order notes: Now show which lookup method was used for attachment
+- Status polling: Now includes order_id in logs when available
+
+**New Hooks:**
+- `woocommerce_checkout_create_order` fallback hook attaches session data if /attach failed
+- Graceful degradation: Data attached during order creation if REST attachment unsuccessful
+
+**Security Improvements:**
+- Method 5 fallback now uses Snap invoice number matching (unique identifier)
+- Customer scoping required (customer_id or billing_email)
+- Only searches active order statuses (pending, on-hold, checkout-draft)
+- Email sourced from session or request (secure for REST context)
+- No time-based logic - works regardless of document upload delays
 
 **Technical Details:**
-- Classic checkout now listens for WooCommerce's `updated_checkout` event, which fires when the checkout form updates via AJAX
-- When this event occurs and Snap Finance is selected, the container is re-ensured and the button is re-rendered
-- This prevents the Snap button from disappearing during checkout interactions that trigger AJAX refreshes
+- Classic checkout now listens for WooCommerce's `updated_checkout` event
+- Method 5 uses identifier matching: customer scope + Snap invoice number
+- Searches up to 5 recent customer orders for invoice match
+- Session-based fallback ensures no data loss even if order doesn't exist during attachment
+- All changes backward compatible with Blocks checkout (no behavioral changes)
+- Validation remains in `process_payment()` method (no duplicate hooks added)
 
 ---
 

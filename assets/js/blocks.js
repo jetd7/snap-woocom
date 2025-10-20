@@ -5,6 +5,7 @@
  * ROBUST MOUNT TIMING FIX for default payment method issue.
  */
 
+console.groupCollapsed('[Snap] Blocks Init');
 console.log('🔧 Snap Finance Blocks:', (window.snap_params && window.snap_params.plugin_version) || 'unknown', 'Starting registration...');
 
 const registerPaymentMethod = window.wc?.wcBlocksRegistry?.registerPaymentMethod;
@@ -544,6 +545,7 @@ console.log('🔧 Snap Finance Blocks Checkout Handler Loaded:', (window.snap_pa
 
     // Register payment method
     registerPaymentMethod(SnapFinance);
+    console.groupEnd();
     console.log('✅ Snap Finance Blocks payment method registered');
 
     // Debug function
