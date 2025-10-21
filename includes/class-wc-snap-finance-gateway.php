@@ -387,11 +387,21 @@ class WC_Snap_Finance_Gateway extends WC_Payment_Gateway {
         );
         wp_enqueue_script( 'snap-transaction' );
 
+        // Central validation module (before form monitor & renderer)
+        wp_register_script(
+            'snap-validation',
+            $base_url . 'assets/js/utils/validation.js',
+            [],
+            ( defined('SNAP_FINANCE_PLUGIN_VERSION') ? SNAP_FINANCE_PLUGIN_VERSION : '1.0.0' ),
+            true
+        );
+        wp_enqueue_script( 'snap-validation' );
+
         // Form monitoring utility (shared between Classic and Blocks)
         wp_register_script(
             'snap-form-monitor',
             $base_url . 'assets/js/utils/form-monitor-util.js',
-            ['snap-payment-detector'], // depends on payment detector
+            ['snap-payment-detector','snap-validation'], // depends on detector + validation
             ( defined('SNAP_FINANCE_PLUGIN_VERSION') ? SNAP_FINANCE_PLUGIN_VERSION : '1.0.0' ),
             true
         );
@@ -413,7 +423,7 @@ class WC_Snap_Finance_Gateway extends WC_Payment_Gateway {
         wp_register_script(
             'snap-render',
             $base_url . 'assets/js/snap-render.js',
-            [ 'snap-transaction', 'snap-application', 'snap-form-monitor' ], // depends on modules
+            [ 'snap-transaction', 'snap-application', 'snap-form-monitor', 'snap-validation' ], // depends on modules
             ( defined('SNAP_FINANCE_PLUGIN_VERSION') ? SNAP_FINANCE_PLUGIN_VERSION : '1.0.0' ),
             true
         );

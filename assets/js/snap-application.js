@@ -210,7 +210,7 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
         }
         console.warn('[Snap] finalize order not ready; keeping checkout blocked', data);
         try { this.blockCheckoutSubmission(); } catch(_) {}
-        try { this.showInlineMessage('Application not complete yet—please finish in the Snap popup.', 'warning'); } catch(_) {}
+        try { this.showInlineMessage('Snap is unavailable until you finish your application. If you believe you have completed your application, please check your emails or contact us for further support', 'warning'); } catch(_) {}
         return false;
       } catch (e) {
         console.error('[Snap] finalize order exception', e);
@@ -452,7 +452,7 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
           if (!ok) {
             console.warn('Finalize not ready; keeping checkout blocked');
             try { this.blockCheckoutSubmission(); } catch(_) {}
-            try { this.showInlineMessage('Application not complete yet—please finish in the Snap popup.', 'warning'); } catch(_) {}
+            try { this.showInlineMessage('Snap is unavailable until you finish your application. If you believe you have completed your application, please check your emails or contact us for further support', 'warning'); } catch(_) {}
           }
         }
       } catch (e) { console.error(e); }
@@ -622,7 +622,7 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
           if (!ok) {
             console.warn('Finalize not ready (return journey); keeping checkout blocked');
             try { this.blockCheckoutSubmission(); } catch(_) {}
-            try { this.showInlineMessage('Application not complete yet—please finish in the Snap popup.', 'warning'); } catch(_) {}
+            try { this.showInlineMessage('Snap is unavailable until you finish your application. If you believe you have completed your application, please check your emails or contact us for further support'); } catch(_) {}
           }
         } catch(_) {}
       } catch(_) {}
@@ -680,29 +680,39 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
           info: 'ℹ️',
           success: '✅'
         };
-        
-        // Create inline message
-        const messageDiv = document.createElement('div');
-        messageDiv.id = `snap-inline-message-${Date.now()}`;
-        messageDiv.innerHTML = `
+
+        // Use a singleton container to prevent duplicate messages
+        const parent = snapContainer.parentNode || document.body;
+        let messageDiv = parent.querySelector('#snap-inline-message');
+        const markup = `
           <div style="${styles[type]} padding: 10px; border-radius: 4px; margin: 10px 0; font-size: 14px;">
             <strong>${icons[type]} ${type.charAt(0).toUpperCase() + type.slice(1)}</strong><br>
             ${message}
           </div>
         `;
-        
-        // Insert before the Snap container
-        snapContainer.parentNode.insertBefore(messageDiv, snapContainer);
-        
+
+        if (messageDiv) {
+          // Replace content if different; keep single instance
+          if (messageDiv.innerHTML !== markup) {
+            messageDiv.innerHTML = markup;
+          }
+        } else {
+          messageDiv = document.createElement('div');
+          messageDiv.id = 'snap-inline-message';
+          messageDiv.innerHTML = markup;
+          // Insert before the Snap container
+          parent.insertBefore(messageDiv, snapContainer);
+        }
+
         // Auto-remove after appropriate time based on type
         const autoRemoveTime = type === 'success' ? 3000 : 5000;
-        setTimeout(() => {
-          if (messageDiv.parentNode) {
-            messageDiv.remove();
-          }
+        try { clearTimeout(window.__snapInlineMsgTimer); } catch(_) {}
+        window.__snapInlineMsgTimer = setTimeout(() => {
+          const el = parent.querySelector('#snap-inline-message');
+          if (el && el.parentNode) el.remove();
         }, autoRemoveTime);
-        
-        console.log(`✅ Inline ${type} message shown:`, message);
+
+        console.log(`✅ Inline ${type} message shown (singleton):`, message);
       } else {
         // Fallback to console only (no modal)
         console.warn(`⚠️ Could not find Snap container for inline ${type} message:`, message);
@@ -754,6 +764,7 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
      * Clear all inline messages
      */
     clearInlineMessages() {
+      // Remove both legacy timestamped messages and the singleton
       const messages = document.querySelectorAll('[id^="snap-inline-message"]');
       messages.forEach(msg => {
         msg.remove();

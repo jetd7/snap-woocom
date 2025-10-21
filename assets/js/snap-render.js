@@ -90,6 +90,7 @@ if (!window.SnapDiag) {
           state.buildId += 1;
           const tx = window.SnapTransaction?.build?.(window.snap_params) || null;
           const msgs = (window.SnapTransaction?.validate?.(tx, window.snap_params) || []);
+          const pf = (window.Validation && window.Validation.preflight) ? window.Validation.preflight(window.snap_params) : { ok: true, messages: [], wooState: { ok: true, reasons: [] } };
           const snapRequired = new Set(['billing_first_name','billing_last_name','billing_email','billing_postcode']); // proxy for SDK-required fields
           const merchantSet = computeMerchantRequired();
           const rows = [];
@@ -104,8 +105,10 @@ if (!window.SnapDiag) {
           console.table(rows);
           const snapOk = msgs.length === 0;
           const merchantFailures = rows.filter(r => r.required_by !== 'Optional' && (r.required_by === 'Merchant' || r.required_by === 'Both') && !r.valid).map(r=>r.field);
-          const merchantOk = merchantFailures.length === 0;
-          console.table([{ snap_required_ok: snapOk, merchant_required_ok: merchantOk, overall_blocked: !(snapOk && merchantOk), reasons: merchantFailures }]);
+          // Prefer centralized preflight for merchant/woo state
+          const merchantOk = !!(pf && pf.wooState ? pf.wooState.ok : (merchantFailures.length === 0));
+          const reasons = (pf && Array.isArray(pf.messages) && pf.messages.length > 0) ? pf.messages : merchantFailures;
+          console.table([{ snap_required_ok: snapOk, merchant_required_ok: merchantOk, overall_blocked: !(snapOk && merchantOk), reasons }]);
           // Application session (if present)
           try {
             const app = (window.SnapStorage?.get?.('application')) || null;
@@ -138,6 +141,8 @@ window.SnapRender = {
     _timeouts: new Set(),
     _sdkLoggerInstalled: false,
     _domObserver: null,
+    _observerCooldownUntil: 0,
+    _guardedRenderActive: false,
 
     _trackTimeout(fn, delay) {
         const id = setTimeout(() => {
@@ -223,6 +228,24 @@ window.SnapRender = {
             console.log('↺ Render in progress - skipping');
             return;
         }
+
+        // Guarded single-render gate: if we already have an initial render and validation is not OK, avoid re-render
+        try {
+            const pre = (window.Validation && window.Validation.preflight) ? window.Validation.preflight(window.snap_params) : { ok: true };
+            if (this._guardedRenderActive && pre && pre.ok === false) {
+                const container = document.getElementById(CONTAINER_ID);
+                if (container) {
+                    // Update overlay/messages only; keep current SDK render
+                    try {
+                        const tx = window.SnapTransaction?.build?.(window.snap_params) || null;
+                        const msgs = window.SnapTransaction?.validate?.(tx, window.snap_params) || [];
+                        this.updateValidationMessagesOnly(container, msgs, tx);
+                        console.log('[Guard] Guarded single-render active → overlay/messages updated; re-render suppressed');
+                    } catch(_) {}
+                }
+                return;
+            }
+        } catch(_) {}
         
         this._isRendering = true;
         this._renderAttempts++;
@@ -479,17 +502,39 @@ window.SnapRender = {
             const paymentBox = containerEl.closest('.payment_box') || containerEl.parentElement || containerEl;
             const observer = new MutationObserver((mutations) => {
                 try {
-                    // If container was removed from DOM, bail (outer hooks will recreate)
-                    if (!document.getElementById(CONTAINER_ID)) return;
-                    // If inner host vanished (common on Classic updated_checkout), schedule a re-render
-                    const hostPresent = !!containerEl.querySelector('.snapuk-host');
-                    if (!hostPresent) {
-                        console.log('🔁 Host missing after DOM change → scheduling re-render');
+                    const now = Date.now();
+                    // If the container was removed from DOM entirely, we must re-render once
+                    const containerPresent = !!document.getElementById(CONTAINER_ID);
+                    if (!containerPresent) {
+                        if (now < this._observerCooldownUntil) return;
+                        this._observerCooldownUntil = now + 500; // 500ms cooldown
+                        console.log('🧭 Container missing → schedule one re-render');
                         this._trackTimeout(() => {
                             if (!this._idle && !this._cancelRequested) {
                                 this.render();
                             }
-                        }, 150);
+                        }, 50);
+                        return;
+                    }
+                    // If we are already rendering or within cooldown, do nothing
+                    if (this._isRendering || now < this._observerCooldownUntil) return;
+                    // Ignore brief inner-host loss; keep single render and overlay
+                    const hostPresent = !!containerEl.querySelector('.snapuk-host');
+                    if (!hostPresent) {
+                        // Soft check for actual button presence in shadow; avoid churn
+                        try {
+                            const sr = containerEl.shadowRoot || null;
+                            const snapBtn = sr && (sr.getElementById('snapuk-checkout-btn') || sr.querySelector('button'));
+                            if (snapBtn) return;
+                        } catch(_) {}
+                        // As a safety, only update overlay/messages rather than re-render
+                        this._observerCooldownUntil = now + 500;
+                        try {
+                            const tx = window.SnapTransaction?.build?.(window.snap_params) || null;
+                            const msgs = window.SnapTransaction?.validate?.(tx, window.snap_params) || [];
+                            this.updateValidationMessagesOnly(containerEl, msgs, tx);
+                            console.log('[Guard] Host briefly missing → updated overlay only (no re-render)');
+                        } catch(_) {}
                     }
                 } catch(_) {}
             });
@@ -844,6 +889,11 @@ window.SnapRender = {
                         console.log('✅ STEP 5: Snap Finance button rendered successfully');
                         try { this.ensureShadowHostVisible(containerEl); } catch(_) {}
                         containerEl.dataset.snapRendered = '1';
+                        // Activate guarded single-render mode after the first mount
+                        if (!this._guardedRenderActive) {
+                            this._guardedRenderActive = true;
+                            console.log('[Guard] Guarded render active');
+                        }
                         // PATCH: post-render verification (once)
                         this._trackTimeout(() => {
                             try {
@@ -1090,6 +1140,18 @@ window.SnapRender = {
                     if (window.FormMonitorUtil?.forceInteraction) {
                         window.FormMonitorUtil.forceInteraction();
                     }
+                    // Universal preflight guard using centralized Validation
+                    try {
+                        const pre = (window.Validation && window.Validation.preflight) ? window.Validation.preflight(window.snap_params) : { ok: true };
+                        if (!pre.ok) {
+                            this.showGenericWarning(containerEl, pre && pre.message ? pre.message : 'Please complete all required fields to continue.');
+                            event.preventDefault();
+                            event.stopPropagation();
+                            return false;
+                        } else {
+                            this.clearGenericWarning(containerEl);
+                        }
+                    } catch(_) {}
                     
                     // Always rebuild transaction and validate on each click
                     const snapParamsLocal = window.snap_params;
@@ -1293,11 +1355,11 @@ window.SnapRender = {
                 console.log('✅ Interaction forced (overlay click) - enabling warnings');
             }
 
-            // Universal preflight guard: block if any required Woo fields invalid
+            // Universal preflight guard using centralized Validation
             try {
-                const pre = this.validateAllRequiredFields();
+                const pre = (window.Validation && window.Validation.preflight) ? window.Validation.preflight(window.snap_params) : { ok: true };
                 if (!pre.ok) {
-                    this.showGenericWarning(containerEl, 'Please complete all required fields to continue.');
+                    this.showGenericWarning(containerEl, pre && pre.message ? pre.message : 'Please complete all required fields to continue.');
                     event.preventDefault();
                     event.stopPropagation();
                     return false;
@@ -1345,6 +1407,7 @@ window.SnapRender = {
                 // One-shot flags: force host replacement, then auto-click after re-render
                 this._forceFullRenderNext = true;
                 this._autoClickNext = true;
+                this._guardedRenderActive = false; // allow a single fresh render now
                 // Trigger render shortly to allow DOM to settle
                 this._trackTimeout(() => {
                     try { this.render(); } catch (e) { console.error('❌ Error triggering forced render:', e); }
@@ -1474,6 +1537,19 @@ window.SnapRender = {
         overlay.addEventListener('click', (event) => {
             console.log('🖱️ Fallback overlay clicked - re-validating...');
             
+            // Universal preflight guard using centralized Validation
+            try {
+                const pre = (window.Validation && window.Validation.preflight) ? window.Validation.preflight(window.snap_params) : { ok: true };
+                if (!pre.ok) {
+                    this.showGenericWarning(containerEl, pre && pre.message ? pre.message : 'Please complete all required fields to continue.');
+                    event.preventDefault();
+                    event.stopPropagation();
+                    return false;
+                } else {
+                    this.clearGenericWarning(containerEl);
+                }
+            } catch(_) {}
+
             // Re-validate with current form data (fresh params)
             const freshSnapParams = { ...(window.snap_params || {}) };
             try { freshSnapParams.billing_postcode = document.querySelector('[name="billing_postcode"]')?.value?.trim() || ''; } catch(_) {}
@@ -1501,18 +1577,18 @@ window.SnapRender = {
                     window.SnapTransaction.highlightMissingFields(newValidationMessages);
                 }
             } else {
-                console.log('✅ VALIDATION NOW PASSED: Removing overlay');
-                
-                // Remove overlay and validation message
-                this.removeValidationOverlay(containerEl);
+                console.log('✅ VALIDATION NOW PASSED (fallback): Forcing fresh render and auto-launch');
+                // Clear messages/highlighting
                 this.clearValidationMessage(containerEl);
-                
-                // Clear field highlighting
                 if (window.SnapTransaction && window.SnapTransaction.clearFieldHighlighting) {
                     window.SnapTransaction.clearFieldHighlighting();
                 }
-                
-                console.log('✅ Snap button now fully functional');
+                this._forceFullRenderNext = true;
+                this._autoClickNext = true;
+                this._guardedRenderActive = false;
+                this._trackTimeout(() => {
+                    try { this.render(); } catch (e) { console.error('❌ Error triggering forced render (fallback):', e); }
+                }, 100);
             }
             
                         event.preventDefault();
@@ -1763,36 +1839,7 @@ window.SnapRender = {
     },
 
 
-    // ================= Preflight (field-agnostic) validation =================
-    validateAllRequiredFields() {
-        try {
-            const form = document.querySelector('.wc-block-checkout__form, .wc-block-components-checkout__form')
-                || document.querySelector('form.checkout');
-            if (!form) return { ok: false, reason: 'form_not_found' };
-
-            const fields = form.querySelectorAll('input, select, textarea');
-            let firstInvalid = null;
-            for (const el of fields) {
-                try {
-                    if (typeof el.checkValidity === 'function' && !el.checkValidity()) {
-                        if (!firstInvalid) firstInvalid = el;
-                    }
-                } catch(_) {}
-            }
-
-            // Woo terms (if present)
-            const terms = form.querySelector('input#terms');
-            if (terms && !terms.checked) firstInvalid = firstInvalid || terms;
-
-            if (firstInvalid) {
-                try { firstInvalid.reportValidity?.(); } catch(_) {}
-                return { ok: false, reason: 'incomplete' };
-            }
-            return { ok: true };
-        } catch(_) {
-            return { ok: true }; // fail-open if environment unknown
-        }
-    },
+    
 
     showGenericWarning(containerEl, msg) {
         try {

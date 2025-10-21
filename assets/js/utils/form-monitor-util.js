@@ -11,6 +11,31 @@
 
     const FormMonitorUtil = {
         /**
+         * Run centralized preflight validation and reflect results in UI
+         * - Shows/clears validation messages
+         * - Highlights missing fields via SnapTransaction
+         */
+        runPreflightAndDisplay() {
+            try {
+                const container = document.getElementById('snap-uk-checkout');
+                if (!container) return;
+                const pre = (window.Validation && window.Validation.preflight)
+                    ? window.Validation.preflight(window.snap_params)
+                    : { ok: true, messages: [] };
+                if (!pre.ok) {
+                    try { window.SnapRender?.showValidationMessage?.(container, pre.messages && pre.messages.length ? pre.messages : [pre.message], pre.tx || {}); } catch(_) {}
+                    try {
+                        if (Array.isArray(pre.snapMessages) && window.SnapTransaction?.highlightMissingFields) {
+                            window.SnapTransaction.clearFieldHighlighting?.();
+                            window.SnapTransaction.highlightMissingFields(pre.snapMessages);
+                        }
+                    } catch(_) {}
+                } else {
+                    try { window.SnapRender?.clearAllErrors?.(container); } catch(_) {}
+                }
+            } catch (e) { /* no-op */ }
+        },
+        /**
          * Initialize form monitoring for Classic WooCommerce checkout
          * @param {Function} reValidateAndRender - Function to call when form changes
          */
@@ -46,6 +71,8 @@
                             }
                             const fieldValue = (t && 'value' in t) ? String(t.value) : '';
                             console.log(`🔄 Form field changed: ${fieldName} = "${fieldValue}" - re-validating Snap Finance`);
+                            // Reflect centralized validation immediately
+                            this.runPreflightAndDisplay();
                             debouncedReValidate();
                         }
                     }, true); // capture to emulate delegated listening
@@ -79,6 +106,8 @@
                         hasInteracted = true;
                         console.log('✅ First interaction detected (classic validation) - enabling warnings');
                     }
+                    // Reflect centralized validation immediately
+                    this.runPreflightAndDisplay();
                     debouncedReValidate();
                 }
             });
@@ -94,7 +123,12 @@
                 const selectedRadio = document.querySelector('input[name="payment_method"]:checked');
                 if (selectedRadio && selectedRadio.value === 'snapfinance_refined') {
                     if (!hasInteracted) hasInteracted = true;
-                    debouncedReValidate();
+                    this.runPreflightAndDisplay();
+                    // Only request a re-render if the container is actually missing
+                    const containerMissing = !document.getElementById('snap-uk-checkout');
+                    if (containerMissing) {
+                        debouncedReValidate();
+                    }
                 }
             }, 100);
             document.addEventListener('updated_checkout', classicLifecycleHandler);
@@ -169,6 +203,8 @@
                     
                     console.log('🔄 WooCommerce validation change detected - re-validating Snap Finance');
                     
+                    // Reflect centralized validation immediately
+                    this.runPreflightAndDisplay();
                     // Trigger our validation
                     reValidateAndRender();
                 } catch (e) {
@@ -342,6 +378,7 @@
                             if (JSON.stringify(currentSnapshot) !== JSON.stringify(lastSnapshot)) {
                                 console.log('🔍 Blocks data store changed:', currentSnapshot);
                                 lastSnapshot = currentSnapshot;
+                                this.runPreflightAndDisplay();
                                 reValidateAndRender();
                             }
                         }

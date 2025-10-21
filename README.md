@@ -1,4 +1,4 @@
-## Snap Finance WooCommerce Plugin (v1.0.18)
+## Snap Finance WooCommerce Plugin (v1.0.22)
 
 Production-ready Snap Finance UK gateway for WooCommerce (Classic & Blocks). Designed for clarity, security, and a clean user journey.
 
@@ -474,6 +474,35 @@ Enhancements:
 - Classic: Resiliency after shipping toggle/coupons — force-show Snap payment box and re-render immediately on `updated_checkout`.
 - Classic: Added MutationObserver to auto-recreate `#snap-uk-checkout` and re-render if removed by Woo AJAX swaps.
 - Cleanup: Moved long inline PHP docs to README pointer; kept only non-obvious code rationale as comments.
+
+### v1.0.19 (2025-10-21)
+-
+### v1.0.20 (2025-10-21)
+
+Enhancements:
+- Inline warning is now singleton to prevent duplicate messages (one message max near `#snap-uk-checkout`).
+- Updated pending/finalize message copy: "Snap is unavailable until you finish your application. If you believe you have completed your application, please check your emails or contact us for further support".
+- Minor cleanup: removed redundant renderer wrapper; `FormMonitorUtil` now reflects `Validation.preflight()` immediately on field/class changes.
+
+### v1.0.21 (2025-10-21)
+### v1.0.22 (2025-10-21)
+
+Enhancements:
+- Guarded single-render: render once per selection; keep button visible with overlay while invalid; re-render once on valid click and auto-click.
+- Observer gating: debounce DOM re-renders; only re-render when container is truly removed; overlay-only updates for brief host loss.
+- Form monitor: no re-render on field/class changes; updates overlay/messages only; re-render only if container missing.
+
+
+Enhancements:
+- Shipping validation: treat hidden `shipping_method` inputs as implicitly selected (single-method scenarios). Only block when visible radios exist and none are checked; added select fallback.
+- Classic UX: keep Snap button visible and guarded when validation messages appear, avoiding button disappearance during dynamic Woo messages.
+
+
+Enhancements:
+- Centralized validation: new `assets/js/utils/validation.js` aggregates Woo errors/terms/shipping and Snap-required field checks into a single `Validation.preflight()` used by Classic and Blocks. Eliminates duplicate logic and edge-case drift.
+- Renderer guard: `snap-render.js` now delegates all preflight checks to `Validation.preflight()` before allowing the Snap SDK to proceed (click, overlay, fallback overlay).
+- Diagnostics: `SnapDiag.printSnapshot()` prints a concise validation summary (snap_required_ok, merchant_required_ok, overall_blocked, reasons) and keeps the transaction table. Read-only; Shadow DOM unaffected.
+- Enqueue wiring: gateway now enqueues `validation.js` and sets it as a dependency for the form monitor and renderer.
 
 ### v1.0.17 (2025-10-20)
 
