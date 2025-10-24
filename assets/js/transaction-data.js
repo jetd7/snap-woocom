@@ -77,7 +77,12 @@
       if (!c.firstName) msgs.push('Missing First Name');
       if (!c.lastName)  msgs.push('Missing Last Name');
       if (!this.isValidEmail(c.email)) msgs.push('Invalid Email Address');
-      // Mobile number validation removed - WooCommerce doesn't require it
+      // Mobile number optional by default (most merchants don't require it);
+      // Add a gentle warning if completely empty to guide users.
+      const mobileValue = (c.mobileNumber || '').trim();
+      if (!mobileValue) {
+        msgs.push('Missing Mobile Number');
+      }
       const postcodeValue = (c.postcode || '').trim();
       if (!postcodeValue) {
         msgs.push('Missing Postcode');
@@ -147,6 +152,9 @@
       // Mobile number highlighting removed - WooCommerce doesn't require it
       const needPost  = messages.some(m => /Postcode/i.test(m));
       const needTerms = messages.some(m => /terms and conditions/i.test(m));
+      const needAddress1 = messages.some(m => /Missing Address|Address\b/i.test(m));
+      const needCity = messages.some(m => /Missing City|\bCity\b/i.test(m));
+      const needMobile = messages.some(m => /Mobile Number/i.test(m));
       const needShippingFirst = messages.some(m => /Shipping First Name/i.test(m));
       const needShippingLast = messages.some(m => /Shipping Last Name/i.test(m));
       const needShippingAddress = messages.some(m => /Shipping Address/i.test(m));
@@ -164,8 +172,10 @@
       if (needFirst) mark('[name="billing_first_name"]');
       if (needLast)  mark('[name="billing_last_name"]');
       if (needEmail) mark('[name="billing_email"]');
-      // Mobile number field highlighting removed
+      if (needMobile) mark('[name="billing_phone"]');
       if (needPost)  mark('[name="billing_postcode"]');
+      if (needAddress1) mark('[name="billing_address_1"]');
+      if (needCity) mark('[name="billing_city"]');
       
       // Highlight terms checkbox
       if (needTerms) mark('#terms');
@@ -249,6 +259,37 @@
       return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email).trim());
     },
 
+    /**
+     * Normalize UK phone numbers: convert leading +44/0044/44 to 0 and strip formatting
+     * Examples:
+     *  +447894586536 → 07894586536
+     *  00447894586536 → 07894586536
+     *  44 7894 586 536 → 07894586536
+     */
+    normalizeUkPhone(phone) {
+      try {
+        if (!phone) return '';
+        let digits = String(phone).replace(/[^0-9+]/g, '');
+        // Handle +44 and 0044 explicitly, then bare 44
+        if (digits.startsWith('+44')) {
+          digits = '0' + digits.slice(3);
+        } else if (digits.startsWith('0044')) {
+          digits = '0' + digits.slice(4);
+        } else {
+          // Strip non-digits then handle bare 44
+          digits = digits.replace(/\D/g, '');
+          if (digits.startsWith('44')) {
+            digits = '0' + digits.slice(2);
+          }
+        }
+        // If it doesn't start with 0 but looks like a 10-digit local number, prefix 0
+        if (!digits.startsWith('0') && digits.length === 10) {
+          digits = '0' + digits;
+        }
+        return digits;
+      } catch(_) { return String(phone || ''); }
+    },
+
     
 
     getTotalMajor(snapParams) {
@@ -322,11 +363,11 @@
                 
                 if (billingAddress && (billingAddress.first_name || billingAddress.last_name || billingAddress.email)) {
                   console.log('✅ Using Cart Store billing data');
-                  return {
+          return {
                     firstName: billingAddress.first_name || '',
                     lastName:  billingAddress.last_name  || '',
                     email:     billingAddress.email      || '',
-                    mobileNumber: billingAddress.phone   || '',
+            mobileNumber: this.normalizeUkPhone(billingAddress.phone),
                     streetAddress: billingAddress.address_1 || '',
                     unit:          billingAddress.address_2 || '',
                     city:          billingAddress.city      || '',
@@ -360,7 +401,7 @@
             firstName: b.first_name || '',
             lastName:  b.last_name  || '',
             email:     b.email      || '',
-            mobileNumber: b.phone   || '',
+            mobileNumber: this.normalizeUkPhone(b.phone),
             streetAddress: b.address_1 || '',
             unit:         b.address_2 || '',
             city:         b.city      || '',
@@ -429,61 +470,24 @@
 
         console.log('🔍 Real-time form values from DOM:', realTimeData);
 
-        // PRIORITY: Use server-side data first 
-        // This is more reliable than DOM field reading and matches how other payment gateways work
-        if (window.snap_params && (
-          window.snap_params.billing_first_name || 
-          window.snap_params.billing_last_name || 
-          window.snap_params.billing_email
-        )) {
-          console.log('✅ Using server-side snap_params data (recommended approach)');
-          return {
-            firstName: window.snap_params.billing_first_name || '',
-            lastName:  window.snap_params.billing_last_name || '',
-            email:     window.snap_params.billing_email || '',
-            mobileNumber: window.snap_params.billing_phone || '',
-            streetAddress: window.snap_params.billing_address_1 || '',
-            unit:          window.snap_params.billing_address_2 || '',
-            city:          window.snap_params.billing_city || '',
-            houseName: '',
-            houseNumber: '',
-            postcode:      window.snap_params.billing_postcode || ''
-          };
-        }
-
         // FALLBACK: Check if we found any real data from DOM
         const hasRealData = Object.values(realTimeData).some(value => value && value.trim() !== '');
         
-        if (!hasRealData) {
-          console.log('⚠️ No server-side or DOM data found - using empty values');
-          return {
-            firstName: '',
-            lastName:  '',
-            email:     '',
-            mobileNumber: '',
-            streetAddress: '',
-            unit:          '',
-            city:          '',
-            houseName: '',
-            houseNumber: '',
-            postcode:      ''
-          };
-        }
-
-        // Always prefer real-time DOM snapshot for Blocks/Classic to avoid stale snap_params
-        console.log('✅ Using real-time DOM form data (may be empty strings when not filled)');
-        return {
-          firstName: realTimeData.firstName,
-          lastName:  realTimeData.lastName,
-          email:     realTimeData.email,
-          mobileNumber: realTimeData.mobileNumber,
-          streetAddress: realTimeData.streetAddress,
-          unit:          realTimeData.unit,
-          city:          realTimeData.city,
+        // Merge strategy: prefer current DOM values when present, otherwise fall back to server snap_params
+        const merged = {
+          firstName: hasRealData ? (realTimeData.firstName || window.snap_params?.billing_first_name || '') : (window.snap_params?.billing_first_name || ''),
+          lastName:  hasRealData ? (realTimeData.lastName  || window.snap_params?.billing_last_name  || '') : (window.snap_params?.billing_last_name  || ''),
+          email:     hasRealData ? (realTimeData.email     || window.snap_params?.billing_email      || '') : (window.snap_params?.billing_email      || ''),
+          mobileNumber: this.normalizeUkPhone(hasRealData ? (realTimeData.mobileNumber || window.snap_params?.billing_phone || '') : (window.snap_params?.billing_phone || '')),
+          streetAddress: hasRealData ? (realTimeData.streetAddress || window.snap_params?.billing_address_1 || '') : (window.snap_params?.billing_address_1 || ''),
+          unit:           hasRealData ? (realTimeData.unit          || window.snap_params?.billing_address_2 || '') : (window.snap_params?.billing_address_2 || ''),
+          city:           hasRealData ? (realTimeData.city          || window.snap_params?.billing_city       || '') : (window.snap_params?.billing_city       || ''),
           houseName: '',
           houseNumber: '',
-          postcode:      realTimeData.postcode
+          postcode:      hasRealData ? (realTimeData.postcode      || window.snap_params?.billing_postcode   || '') : (window.snap_params?.billing_postcode   || '')
         };
+        console.log('✅ Using merged customer data (DOM preferred, server fallback):', merged);
+        return merged;
       } catch (e) {
         console.error('❌ Error getting customer data:', e);
       }
@@ -494,7 +498,7 @@
         firstName: snapParams?.billing_first_name || '',
         lastName:  snapParams?.billing_last_name  || '',
         email:     snapParams?.billing_email      || '',
-        mobileNumber: snapParams?.billing_phone   || '',
+        mobileNumber: this.normalizeUkPhone(snapParams?.billing_phone),
         streetAddress: snapParams?.billing_address_1 || '',
         unit:          snapParams?.billing_address_2 || '',
         city:          snapParams?.billing_city       || '',

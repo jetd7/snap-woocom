@@ -634,12 +634,12 @@ class WC_Snap_Finance_Gateway extends WC_Payment_Gateway {
             return array( 'result' => 'failure' );
         }
 
-        // Pull app details from session
-        $app_id = function_exists('WC') && WC()->session ? WC()->session->get( 'snap_application_id' ) : '';
-        $token  = function_exists('WC') && WC()->session ? WC()->session->get( 'snap_token' ) : '';
-        $app    = function_exists('WC') && WC()->session ? WC()->session->get( 'snap_application' ) : null; // may contain progressStatus
+        // Pull app details from session (prefer consolidated object)
+        $app    = function_exists('WC') && WC()->session ? WC()->session->get( 'snap_application' ) : null; // may contain id, token, status
+        $app_id = is_array( $app ) && ! empty( $app['id'] ) ? (string) $app['id'] : ( function_exists('WC') && WC()->session ? (string) ( WC()->session->get( 'snap_application_id' ) ?: '' ) : '' );
+        $token  = is_array( $app ) && ! empty( $app['token'] ) ? (string) $app['token'] : ( function_exists('WC') && WC()->session ? (string) ( WC()->session->get( 'snap_token' ) ?: '' ) : '' );
 
-        // If we know of a DENIED state, block checkout
+        // If we know of a DENIED state, block checkout (show explicit decline only)
         if ( is_array( $app ) && isset( $app['status'] ) && (int) $app['status'] === 14 ) {
             wc_add_notice( __( 'Your Snap Finance application was declined. Please choose another payment method or try eligibility again.', 'snap-finance-gateway' ), 'error' );
             return array( 'result' => 'failure' );
@@ -657,21 +657,42 @@ class WC_Snap_Finance_Gateway extends WC_Payment_Gateway {
                 $body = json_decode( wp_remote_retrieve_body( $resp ), true );
                 if ( $code === 200 && is_array( $body ) && isset( $body['progressStatus'] ) ) {
                     $ps = (int) $body['progressStatus'];
-                    // Deny order placement unless FUNDED/COMPLETE; DENIED gets explicit message
+                    // DENIED → explicit message
                     if ( $ps === 14 ) {
                         wc_add_notice( __( 'Your Snap Finance application was declined. Please choose another payment method or try eligibility again.', 'snap-finance-gateway' ), 'error' );
                         return array( 'result' => 'failure' );
                     }
-                    if ( ! in_array( $ps, array( 0, 30 ), true ) ) {
-                        wc_add_notice( __( 'Please complete your Snap Finance application in the popup before placing the order.', 'snap-finance-gateway' ), 'error' );
-                        return array( 'result' => 'failure' );
+
+                    // FUNDED or COMPLETE → mark paid and proceed to thank-you
+                    if ( in_array( $ps, array( 0, 30 ), true ) ) {
+                        try {
+                            if ( function_exists( 'snap_apply_progress_to_order' ) ) {
+                                snap_apply_progress_to_order( $order, (int) $ps, array( 'application_id' => $app_id ) );
+                            } else {
+                                if ( ! $order->is_paid() ) { $order->payment_complete(); }
+                            }
+                            // Prevent reuse of the same funded application on subsequent orders
+                            if ( in_array( (int) $ps, array( 0, 30 ), true ) ) {
+                                $order->update_meta_data( '_snap_signed_lock_app_id', (string) $app_id );
+                                $order->save();
+                            }
+                            if ( function_exists( 'WC' ) && WC()->cart ) { WC()->cart->empty_cart( false ); }
+                            if ( function_exists( 'snap_clear_wc_session_after_finalize' ) ) { snap_clear_wc_session_after_finalize(); }
+                        } catch ( Throwable $e ) {}
+
+                        return array(
+                            'result'   => 'success',
+                            'redirect' => $order->get_checkout_order_received_url(),
+                        );
                     }
+
+                    // Any other state (pending/approved/etc.) → silently fail; front-end will guide/launch
+                    return array( 'result' => 'failure' );
                 }
             }
         }
 
-        // Fallback safety: block placement if we have no funded signal
-        wc_add_notice( __( 'Please complete your Snap Finance application in the popup before placing the order.', 'snap-finance-gateway' ), 'error' );
+        // Fallback: silently block; JS handles guidance/auto-launch
         return array( 'result' => 'failure' );
     }
 
@@ -835,6 +856,14 @@ class WC_Snap_Finance_Gateway extends WC_Payment_Gateway {
             box-sizing: border-box !important;
             margin: 5px 0 !important;
         }
+
+        /* Classic checkout: add breathing room from theme caret (::before) and match requested paddings */
+        .woocommerce-checkout li.payment_method_snapfinance_refined .payment_box [id^="snap-validation-message"] {
+            margin-top: 14px !important; /* gap below caret */
+            padding-top: 1px !important;
+            padding-left: 10px !important;
+            padding-right: 10px !important;
+        }
         
         /* Ensure Snap Finance payment method content uses full width */
         .snapfinance_refined .wc-block-components-payment-method-content,
@@ -867,15 +896,35 @@ class WC_Snap_Finance_Gateway extends WC_Payment_Gateway {
             position: relative !important;
         }
         
-        /* Add top spacing to validation message container (matches any dynamic ID suffix) */
+        /* Legacy selector kept for safety (IDs with dynamic suffix) */
         .woocommerce-checkout li.payment_method_snapfinance_refined .payment_box [id^="snap-validation-message-"] {
-            padding-top: 14px !important;
+            margin-top: 14px !important;
+            padding-top: 1px !important;
+            padding-left: 10px !important;
+            padding-right: 10px !important;
         }
         
         /* Ensure no negative margins on inner validation div that could fight spacing */
         .woocommerce-checkout li.payment_method_snapfinance_refined .payment_box [id^="snap-validation-message-"] > div {
             margin-top: 0 !important;
         }
+
+        /* Classic checkout: add identical spacing for inline info/warning box (blue, etc.) */
+        .woocommerce-checkout li.payment_method_snapfinance_refined .payment_box #snap-inline-message,
+        .woocommerce-checkout li.payment_method_snapfinance_refined .payment_box [id^="snap-inline-message"] {
+            margin-top: 14px !important; /* gap below caret */
+            padding-top: 1px !important;
+            padding-left: 10px !important;
+            padding-right: 10px !important;
+        }
+
+		/* Blocks checkout: provide breathing room between Blocks caret/diamond and 
+		   our red validation box to avoid visual overlap */
+		.wc-block-components-payment-method-content [id^="snap-validation-message"],
+		.wc-block-components-payment-method-content [id^="snap-validation-message-"] {
+			margin-top: 12px !important;
+			padding-top: 12px !important;
+		}
 
         </style>
         <?php

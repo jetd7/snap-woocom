@@ -3,7 +3,7 @@
  * Plugin Name: Snap Finance Payment Gateway
  * Plugin URI:  https://finmatch.co.uk
  * Description: Allow customers to apply for finance through Snap Finance UK (Classic & Blocks).
- * Version:     1.0.22
+ * Version:     1.0.37
  * Author:      FinMatch
  * Author URI:  https://finmatch.co.uk
  * Text Domain: snap-finance-gateway
@@ -23,7 +23,7 @@ if ( ! defined( 'SNAP_FINANCE_PLUGIN_VERSION' ) ) {
         require_once ABSPATH . 'wp-admin/includes/plugin.php';
     }
     $data = function_exists( 'get_file_data' ) ? get_file_data( __FILE__, array( 'Version' => 'Version' ) ) : array();
-    define( 'SNAP_FINANCE_PLUGIN_VERSION', isset( $data['Version'] ) && $data['Version'] ? $data['Version'] : '1.0.22' );
+    define( 'SNAP_FINANCE_PLUGIN_VERSION', isset( $data['Version'] ) && $data['Version'] ? $data['Version'] : '1.0.37' );
 }
 
 /**
@@ -115,7 +115,7 @@ if ( ! function_exists( 'snap_log' ) ) {
 snap_log( 'Main plugin file loaded' );
 
 /** ------------------------------------------------------------------------
- * i18n
+ * Internationalisation
  * --------------------------------------------------------------------- */
 add_action( 'init', function () {
     load_plugin_textdomain(
@@ -197,6 +197,69 @@ add_action( 'plugins_loaded', function () {
 }, 20 );
 
 /** ------------------------------------------------------------------------
+ * Classic checkout: create a draft order early for Snap
+ * --------------------------------------------------------------------- */
+add_action( 'woocommerce_checkout_init', function( $checkout ) {
+    try {
+        if ( ! function_exists( 'WC' ) || ! WC()->session ) {
+            try { snap_orders_log( 'draft_order_failed', array( 'source' => 'checkout_init', 'reason' => 'no_session' ) ); } catch ( Throwable $e ) {}
+            return;
+        }
+
+        // Only proceed if a Snap application exists (prevents accidental drafts for fresh sessions)
+        $snap_application = (array) ( WC()->session->get( 'snap_application' ) ?: array() );
+        if ( empty( $snap_application ) ) {
+            return;
+        }
+
+        // If a seeded draft exists and loads, do nothing
+        $seeded_order_id = (int) ( WC()->session->get( 'snap_seeded_order_id' ) ?: 0 );
+        if ( $seeded_order_id > 0 ) {
+            $maybe = wc_get_order( $seeded_order_id );
+            if ( $maybe ) { return; }
+        }
+
+        // Create a new draft order (Blocks-compatible status)
+        $order = wc_create_order( array( 'status' => 'checkout-draft', 'customer_id' => get_current_user_id() ) );
+
+        // Copy cart items
+        if ( function_exists( 'WC' ) && WC()->cart ) {
+            foreach ( WC()->cart->get_cart() as $cart_item ) {
+                try {
+                    $product = isset( $cart_item['data'] ) ? $cart_item['data'] : wc_get_product( $cart_item['product_id'] );
+                    if ( $product ) {
+                        $order->add_product( $product, isset( $cart_item['quantity'] ) ? (int) $cart_item['quantity'] : 1, array( 'variation_id' => isset( $cart_item['variation_id'] ) ? (int) $cart_item['variation_id'] : 0 ) );
+                    }
+                } catch ( Throwable $e ) {}
+            }
+        }
+
+        // Seed billing details to improve later lookups
+        try {
+            if ( function_exists( 'WC' ) && WC()->checkout ) {
+                $order->set_billing_email( WC()->checkout->get_value( 'billing_email' ) ?: '' );
+                $order->set_billing_first_name( WC()->checkout->get_value( 'billing_first_name' ) ?: '' );
+                $order->set_billing_last_name( WC()->checkout->get_value( 'billing_last_name' ) ?: '' );
+            }
+        } catch ( Throwable $e ) {}
+
+        // Set payment method and totals
+        $order->set_payment_method( 'snapfinance_refined' );
+        try { $order->calculate_totals(); } catch ( Throwable $e ) {}
+        $order_id = (int) $order->save();
+        WC()->session->set( 'snap_seeded_order_id', $order_id );
+
+        try {
+            snap_orders_log( 'draft_order_created', array(
+                'source'         => 'checkout_init',
+                'order_id'       => (string) $order_id,
+                'application_id' => isset( $snap_application['id'] ) ? (string) $snap_application['id'] : 'none',
+            ) );
+        } catch ( Throwable $e ) {}
+    } catch ( Throwable $e ) {}
+}, 10, 1 );
+
+/** ------------------------------------------------------------------------
  * Register gateway (Classic) - delayed to avoid early translation triggers
  * --------------------------------------------------------------------- */
 add_action( 'init', function() {
@@ -232,6 +295,9 @@ add_action( 'init', function() {
 
 // Add debugging to see all available gateways
 add_action( 'wp_footer', function() {
+    if ( ! defined( 'WP_DEBUG' ) || ! WP_DEBUG ) {
+        return; // Gate debug output to development environments only
+    }
     if (function_exists('WC') && WC()->payment_gateways()) {
         $gateways = WC()->payment_gateways()->payment_gateways();
         error_log( 'SNAP DEBUG: All registered gateways: ' . implode(', ', array_keys($gateways)) );
@@ -336,6 +402,29 @@ function snap_save_application_cb() {
     wp_send_json_success(['progressStatus' => $status]);
 }
 
+// Lightweight: clear Snap application from session so a new app can start cleanly
+add_action('wc_ajax_snap_clear_application', 'snap_clear_application_cb');
+add_action('wc_ajax_nopriv_snap_clear_application', 'snap_clear_application_cb');
+function snap_clear_application_cb() {
+    try {
+        if ( function_exists( 'WC' ) && WC()->session ) {
+            WC()->session->__unset( 'snap_application' );
+            WC()->session->__unset( 'snap_application_id' );
+            WC()->session->__unset( 'snap_token' );
+            WC()->session->__unset( 'snap_seeded_order_id' );
+        }
+        try {
+            snap_orders_log( 'session_cleared', array(
+                'source' => 'ajax',
+                'note'   => 'client_requested_clear_for_new_application'
+            ) );
+        } catch ( Throwable $e ) {}
+        wp_send_json_success( array( 'ok' => true ) );
+    } catch ( Throwable $e ) {
+        wp_send_json_error( array( 'ok' => false ), 500 );
+    }
+}
+
 /** ------------------------------------------------------------------------
  * Helpers for REST finalize mapping and cleanup
  * --------------------------------------------------------------------- */
@@ -352,6 +441,7 @@ if ( ! function_exists( 'snap_clear_wc_session_after_finalize' ) ) {
             WC()->session->__unset( 'order_awaiting_payment' );
             WC()->session->__unset( 'reload_checkout' );
             WC()->session->__unset( 'snap_seeded_order_id' );
+            WC()->session->__unset( 'chosen_payment_method' );
             
             // Clear ALL Snap session keys (comprehensive cleanup)
             WC()->session->__unset( 'snap_application' ); // Main application object
@@ -362,9 +452,6 @@ if ( ! function_exists( 'snap_clear_wc_session_after_finalize' ) ) {
         if ( isset( $_SESSION['snap_seeded_order_id'] ) ) {
             unset( $_SESSION['snap_seeded_order_id'] );
         }
-        // Also clear the signed cookie so a future checkout cannot accidentally
-        // associate a new draft order with a prior funded application.
-        try { snap_clear_signed_cookie( 'snap_seeded_order_id' ); } catch ( Throwable $e ) {}
         
         // Log cleanup for debugging
         try {
@@ -492,34 +579,7 @@ if ( ! function_exists( 'snap_cookie_sign' ) ) {
     }
 }
 
-if ( ! function_exists( 'snap_set_signed_cookie' ) ) {
-    function snap_set_signed_cookie( string $name, int $order_id, int $ttl = DAY_IN_SECONDS ): void {
-        $sig  = snap_cookie_sign( $name, $order_id );
-        $val  = wp_json_encode( array( 'id' => $order_id, 'sig' => $sig ) );
-        $host = parse_url( home_url(), PHP_URL_HOST );
-        setcookie( $name, $val, time() + $ttl, '/', $host, is_ssl(), true ); // HttpOnly
-    }
-}
-
-if ( ! function_exists( 'snap_get_signed_cookie' ) ) {
-    function snap_get_signed_cookie( string $name ): ?int {
-        if ( empty( $_COOKIE[ $name ] ) ) return null;
-        $raw = wp_unslash( $_COOKIE[ $name ] );
-        $obj = json_decode( $raw, true );
-        if ( ! is_array( $obj ) || empty( $obj['id'] ) || empty( $obj['sig'] ) ) return null;
-        $id  = (int) $obj['id'];
-        $sig = (string) $obj['sig'];
-        $exp = snap_cookie_sign( $name, $id );
-        return hash_equals( $exp, $sig ) ? $id : null;
-    }
-}
-
-if ( ! function_exists( 'snap_clear_signed_cookie' ) ) {
-    function snap_clear_signed_cookie( string $name ): void {
-        $host = parse_url( home_url(), PHP_URL_HOST );
-        setcookie( $name, '', time() - 3600, '/', $host, is_ssl(), true );
-    }
-}
+// Signed cookie helpers removed; WC session is the single source of truth for seeded order id
 
 if ( ! function_exists( 'snap_link_invoice_to_order' ) ) {
     function snap_link_invoice_to_order( string $invoice_number, int $order_id ): void {
@@ -561,16 +621,47 @@ if ( ! function_exists( 'snap_find_order_by_invoice' ) ) {
  * @return int Order ID if found, 0 otherwise
  * --------------------------------------------------------------------- */
 if ( ! function_exists( 'snap_find_blocks_draft_order_id' ) ) {
-    function snap_find_blocks_draft_order_id( $expected_total = null ) : int {
+    /**
+     * Find latest draft order with optional scoping by application or customer context
+     * @param float|null $expected_total Optional total to validate/log
+     * @param array $ctx Optional context: ['application_id' => string, 'billing_email' => string, 'customer_id' => int]
+     */
+    function snap_find_blocks_draft_order_id( $expected_total = null, array $ctx = array() ) : int {
         try {
-            // Look for latest order with checkout-draft status
+            // Prefer session-cached seeded order when present
+            if ( function_exists( 'WC' ) && WC()->session ) {
+                $seeded = (int) ( WC()->session->get( 'snap_seeded_order_id' ) ?: 0 );
+                if ( $seeded > 0 ) { return $seeded; }
+            }
+
+            // Build scoped args for latest draft
             $args = array(
-                'limit'        => 1,
-                'orderby'      => 'date',
-                'order'        => 'DESC',
-                'status'       => array( 'checkout-draft' ), // Blocks-specific status
-                'return'       => 'ids',
+                'limit'   => 1,
+                'orderby' => 'date',
+                'order'   => 'DESC',
+                'status'  => array( 'checkout-draft' ), // Blocks-specific status
+                'return'  => 'ids',
             );
+
+            // Scope by application_id if provided (most precise)
+            $app_id = isset( $ctx['application_id'] ) ? (string) $ctx['application_id'] : '';
+            if ( $app_id !== '' ) {
+                $args['meta_key']   = '_snap_application_id';
+                $args['meta_value'] = $app_id;
+                unset( $expected_total ); // total check less meaningful when scoping by app
+            } else {
+                // Otherwise scope by customer when available (reduces ambiguity on high-traffic sites)
+                $customer_id = isset( $ctx['customer_id'] ) ? (int) $ctx['customer_id'] : 0;
+                if ( $customer_id > 0 ) {
+                    $args['customer_id'] = $customer_id;
+                } else {
+                    $email = isset( $ctx['billing_email'] ) ? sanitize_email( (string) $ctx['billing_email'] ) : '';
+                    if ( $email !== '' ) {
+                        $args['billing_email'] = $email;
+                    }
+                }
+            }
+
             $orders = wc_get_orders( $args );
             if ( empty( $orders ) ) { return 0; }
             $order_id = (int) $orders[0];
@@ -645,6 +736,26 @@ add_action( 'rest_api_init', function() {
             'invoice_number' => array( 'required' => false ),
             'order_key'      => array( 'required' => false ),
             'cart_hash'      => array( 'required' => false ),
+            'progress_status'=> array( 'required' => false ),
+            // Optional lightweight billing snapshot to hydrate draft order details early
+            'billing_first_name' => array( 'required' => false ),
+            'billing_last_name'  => array( 'required' => false ),
+            'billing_email'      => array( 'required' => false ),
+            'billing_phone'      => array( 'required' => false ),
+            'billing_address_1'  => array( 'required' => false ),
+            'billing_address_2'  => array( 'required' => false ),
+            'billing_city'       => array( 'required' => false ),
+            'billing_postcode'   => array( 'required' => false ),
+            // Optional shipping snapshot (Classic only typically)
+            'shipping_first_name' => array( 'required' => false ),
+            'shipping_last_name'  => array( 'required' => false ),
+            'shipping_address_1'  => array( 'required' => false ),
+            'shipping_address_2'  => array( 'required' => false ),
+            'shipping_city'       => array( 'required' => false ),
+            'shipping_postcode'   => array( 'required' => false ),
+            'shipping_method_id'   => array( 'required' => false ),
+            'shipping_method_title'=> array( 'required' => false ),
+            'order_note'           => array( 'required' => false ),
         ),
     ) );
 
@@ -686,6 +797,7 @@ if ( ! function_exists( 'snap_rest_attach_cb' ) ) {
             $app_id  = sanitize_text_field( (string) ( $r->get_param( 'application_id' ) ?? '' ) );
             $invoice = sanitize_text_field( (string) ( $r->get_param( 'invoice_number' ) ?? '' ) );
             $order_key = sanitize_text_field( (string) ( $r->get_param( 'order_key' ) ?? '' ) );
+            $progress_status = (int) ( $r->get_param( 'progress_status' ) ?? 0 );
             
             // Log attach attempt with all parameters
             try { 
@@ -748,7 +860,16 @@ if ( ! function_exists( 'snap_rest_attach_cb' ) ) {
             
             // Method 4: Latest draft order - Primarily for Blocks checkout
             if ( ! $order_id ) {
-                $order_id = snap_find_blocks_draft_order_id( null );
+                // Build scoping context (customer/email) to reduce ambiguity
+                $ctx = array();
+                $cust_id = get_current_user_id();
+                if ( $cust_id ) {
+                    $ctx['customer_id'] = (int) $cust_id;
+                } else if ( function_exists( 'WC' ) && WC()->session ) {
+                    $sess_email = WC()->session->get( 'billing_email' );
+                    if ( $sess_email ) { $ctx['billing_email'] = sanitize_email( (string) $sess_email ); }
+                }
+                $order_id = snap_find_blocks_draft_order_id( null, $ctx );
                 if ( $order_id ) {
                     $lookup_method = 'latest_draft';
                     try { snap_orders_log( 'attach_lookup', array( 'source' => 'rest', 'method' => $lookup_method, 'order_id' => (string) $order_id, 'application_id' => $app_id ) ); } catch ( Throwable $e ) {}
@@ -866,6 +987,76 @@ if ( ! function_exists( 'snap_rest_attach_cb' ) ) {
             $order->set_payment_method( 'snapfinance_refined' );
             $order->set_payment_method_title( 'Snap Finance' );
             if ( $invoice !== '' )  { $order->update_meta_data( '_snap_invoice_number', $invoice ); }
+            // Hydrate billing details if provided so draft shows customer info
+            $bf = array(
+                'first_name' => (string) ( $r->get_param( 'billing_first_name' ) ?? '' ),
+                'last_name'  => (string) ( $r->get_param( 'billing_last_name' ) ?? '' ),
+                'email'      => (string) ( $r->get_param( 'billing_email' ) ?? '' ),
+                'phone'      => (string) ( $r->get_param( 'billing_phone' ) ?? '' ),
+                'address_1'  => (string) ( $r->get_param( 'billing_address_1' ) ?? '' ),
+                'address_2'  => (string) ( $r->get_param( 'billing_address_2' ) ?? '' ),
+                'city'       => (string) ( $r->get_param( 'billing_city' ) ?? '' ),
+                'postcode'   => (string) ( $r->get_param( 'billing_postcode' ) ?? '' ),
+            );
+            try {
+                if ( $bf['email'] ) { $order->set_billing_email( sanitize_email( $bf['email'] ) ); }
+                if ( $bf['first_name'] ) { $order->set_billing_first_name( sanitize_text_field( $bf['first_name'] ) ); }
+                if ( $bf['last_name'] ) { $order->set_billing_last_name( sanitize_text_field( $bf['last_name'] ) ); }
+                if ( $bf['phone'] ) { $order->set_billing_phone( sanitize_text_field( $bf['phone'] ) ); }
+                if ( $bf['address_1'] ) { $order->set_billing_address_1( sanitize_text_field( $bf['address_1'] ) ); }
+                if ( $bf['address_2'] ) { $order->set_billing_address_2( sanitize_text_field( $bf['address_2'] ) ); }
+                if ( $bf['city'] ) { $order->set_billing_city( sanitize_text_field( $bf['city'] ) ); }
+                if ( $bf['postcode'] ) { $order->set_billing_postcode( sanitize_text_field( $bf['postcode'] ) ); }
+            } catch ( Throwable $e ) {}
+
+            // Hydrate shipping details if provided
+            $sf = array(
+                'first_name' => (string) ( $r->get_param( 'shipping_first_name' ) ?? '' ),
+                'last_name'  => (string) ( $r->get_param( 'shipping_last_name' ) ?? '' ),
+                'address_1'  => (string) ( $r->get_param( 'shipping_address_1' ) ?? '' ),
+                'address_2'  => (string) ( $r->get_param( 'shipping_address_2' ) ?? '' ),
+                'city'       => (string) ( $r->get_param( 'shipping_city' ) ?? '' ),
+                'postcode'   => (string) ( $r->get_param( 'shipping_postcode' ) ?? '' ),
+            );
+            try {
+                if ( $sf['first_name'] ) { $order->set_shipping_first_name( sanitize_text_field( $sf['first_name'] ) ); }
+                if ( $sf['last_name'] ) { $order->set_shipping_last_name( sanitize_text_field( $sf['last_name'] ) ); }
+                if ( $sf['address_1'] ) { $order->set_shipping_address_1( sanitize_text_field( $sf['address_1'] ) ); }
+                if ( $sf['address_2'] ) { $order->set_shipping_address_2( sanitize_text_field( $sf['address_2'] ) ); }
+                if ( $sf['city'] ) { $order->set_shipping_city( sanitize_text_field( $sf['city'] ) ); }
+                if ( $sf['postcode'] ) { $order->set_shipping_postcode( sanitize_text_field( $sf['postcode'] ) ); }
+            } catch ( Throwable $e ) {}
+
+            // Apply shipping method if provided (Classic only; Blocks handles totals differently)
+            try {
+                $rate_id = sanitize_text_field( (string) ( $r->get_param( 'shipping_method_id' ) ?? '' ) );
+                $rate_title = sanitize_text_field( (string) ( $r->get_param( 'shipping_method_title' ) ?? '' ) );
+                if ( $rate_id !== '' ) {
+                    $items = $order->get_items( 'shipping' );
+                    if ( empty( $items ) ) {
+                        $item = new WC_Order_Item_Shipping();
+                        $item->set_method_id( $rate_id );
+                        if ( $rate_title !== '' ) { $item->set_method_title( $rate_title ); }
+                        $order->add_item( $item );
+                    } else {
+                        foreach ( $items as $item ) {
+                            $item->set_method_id( $rate_id );
+                            if ( $rate_title !== '' ) { $item->set_method_title( $rate_title ); }
+                            $item->save();
+                        }
+                    }
+                    try { $order->calculate_totals(); } catch ( Throwable $e ) {}
+                }
+            } catch ( Throwable $e ) {}
+
+            // Add customer order note if provided
+            try {
+                $note = (string) ( $r->get_param( 'order_note' ) ?? '' );
+                if ( $note !== '' ) {
+                    $order->add_order_note( 'Customer note: ' . sanitize_textarea_field( $note ) );
+                }
+            } catch ( Throwable $e ) {}
+
             // Update application id (latest) and append to history for auditability
             $app_ids = (array) $order->get_meta( '_snap_application_ids' );
             $app_ids[] = $app_id;
@@ -877,15 +1068,37 @@ if ( ! function_exists( 'snap_rest_attach_cb' ) ) {
                 return new WP_REST_Response( array( 'ok' => false, 'reason' => 'order_locked_signed' ), 423 );
             }
             $order->update_meta_data( '_snap_application_id', $app_id );
+            if ( $progress_status ) {
+                $order->update_meta_data( '_snap_progress_status', (int) $progress_status );
+                // Update order status for critical states only
+                if ( (int) $progress_status === 14 ) {
+                    $order->update_status( 'failed' );
+                } elseif ( (int) $progress_status === 26 ) {
+                    if ( 'checkout-draft' === $order->get_status() ) {
+                        $order->update_status( 'pending' );
+                    }
+                } else {
+                    // Optionally keep/checkout-draft if status exists
+                    $st = wc_get_order_statuses();
+                    if ( isset( $st['wc-checkout-draft'] ) && 'checkout-draft' !== $order->get_status() ) {
+                        $order->update_status( 'checkout-draft' );
+                    }
+                }
+            }
             // Do not promote draft to pending on attach; status changes only on funded/complete
             $order->add_order_note( sprintf( 'Snap Finance application started. App ID: %s, Snap Invoice: %s, Lookup method: %s', $app_id, $invoice, $lookup_method ) );
             $order->save();
 
             if ( function_exists( 'WC' ) && WC()->session ) {
                 WC()->session->set( 'snap_seeded_order_id', (int) $order_id );
+                // Update session application snapshot
+                $sess_app = (array) ( WC()->session->get( 'snap_application' ) ?: array() );
+                $sess_app['id'] = $app_id;
+                if ( $progress_status ) { $sess_app['status'] = (int) $progress_status; }
+                if ( $invoice !== '' ) { $sess_app['invoice'] = (string) $invoice; }
+                WC()->session->set( 'snap_application', $sess_app );
             }
             if ( $invoice !== '' ) { snap_link_invoice_to_order( $invoice, (int) $order_id ); }
-            snap_set_signed_cookie( 'snap_seeded_order_id', (int) $order_id, DAY_IN_SECONDS );
 
             try {
                 snap_orders_log( 'attach_ok', array(
@@ -893,6 +1106,7 @@ if ( ! function_exists( 'snap_rest_attach_cb' ) ) {
                     'order_id'       => (string) $order_id,
                     'application_id' => $app_id,
                     'invoice_number' => $invoice,
+                    'progress'       => (string) (int) $progress_status,
                     'wc_status'      => $order->get_status(),
                     'method'         => $order->get_payment_method(),
                     'note'           => 'lookup_via_' . $lookup_method,
@@ -1077,8 +1291,16 @@ function snap_rest_funded_cb( WP_REST_Request $request ) {
             ), 200 );
         }
 
-        // Fallback B: try latest draft order
-        $draft_id = snap_find_blocks_draft_order_id( null );
+        // Fallback B: try latest draft order (scoped by customer/email when possible)
+        $ctx = array();
+        $cust_id = get_current_user_id();
+        if ( $cust_id ) {
+            $ctx['customer_id'] = (int) $cust_id;
+        } else if ( function_exists( 'WC' ) && WC()->session ) {
+            $sess_email = WC()->session->get( 'billing_email' );
+            if ( $sess_email ) { $ctx['billing_email'] = sanitize_email( (string) $sess_email ); }
+        }
+        $draft_id = snap_find_blocks_draft_order_id( null, $ctx );
         if ( $draft_id > 0 ) {
             $order = wc_get_order( (int) $draft_id );
             if ( $order ) {
@@ -1213,10 +1435,7 @@ if ( ! function_exists( 'snap_rest_journey_cb' ) ) {
         if ( function_exists( 'WC' ) && WC()->session ) {
             $order_id = (int) ( WC()->session->get( 'snap_seeded_order_id' ) ?: 0 );
         }
-        if ( ! $order_id ) {
-            $cookie_id = snap_get_signed_cookie( 'snap_seeded_order_id' );
-            if ( $cookie_id ) { $order_id = (int) $cookie_id; }
-        }
+        // Cookie retrieval removed; rely solely on WC session/REST lookups
         if ( $order_id > 0 ) { $order = wc_get_order( $order_id ); }
         if ( ! $order && $app_id !== '' ) {
             $found = wc_get_orders( array(

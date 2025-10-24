@@ -1,4 +1,4 @@
-## Snap Finance WooCommerce Plugin (v1.0.22)
+## Snap Finance WooCommerce Plugin (v1.0.37)
 
 Production-ready Snap Finance UK gateway for WooCommerce (Classic & Blocks). Designed for clarity, security, and a clean user journey.
 
@@ -486,6 +486,32 @@ Enhancements:
 
 ### v1.0.21 (2025-10-21)
 ### v1.0.22 (2025-10-21)
+### v1.0.23 (2025-10-21)
+
+Maintenance:
+- Version bump only to validate the guarded single-render changes in production-like environments before adding optional hardenings.
+
+### v1.0.24 (2025-10-21)
+
+Enhancements:
+- Early SVG pin for Classic: immediately after SDK call, set missing SVG width/height (320×45) with a short retry loop to eliminate initial flash. Post-render pin remains as backup.
+- Diagnostics gating: guard-state logs (observer/guard transitions) honor the “Enable diagnostics (console)” setting.
+
+### v1.0.25 (2025-10-21)
+### v1.0.26 (2025-10-21)
+### v1.0.30 (2025-10-22)
+
+Enhancements:
+- Sticky validation message: singleton update to avoid flicker; shipping errors show even before interaction.
+- Field guidance: added Missing Mobile Number message and highlighting; ensured highlighting hooks exist for city and address 1 when those messages are present.
+
+Enhancements:
+- Classic DOM swap resilience: guarded gate no longer suppresses re-render when `#snap-uk-checkout` is missing; the button is restored after `updated_checkout` swaps.
+- No functional changes on Blocks; guarded single-render remains unchanged.
+
+Enhancements:
+- Classic stability: extended early SVG pin window to ~500ms to catch late Shadow DOM, and added a small Classic-only delay before the first overlay to avoid early retries. Guarded single-render behavior unchanged.
+
 
 Enhancements:
 - Guarded single-render: render once per selection; keep button visible with overlay while invalid; re-render once on valid click and auto-click.

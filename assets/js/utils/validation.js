@@ -22,6 +22,7 @@
           }
         });
       });
+      // Revert: return all Woo errors so preflight remains conservative
       return msgs;
     } catch(_) { return []; }
   }

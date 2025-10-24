@@ -12,6 +12,14 @@ const CONTAINER_ID = 'snap-uk-checkout';
 const log = (...args) => console.log(...args);
 const warn = (...args) => console.warn(...args);
 const err = (...args) => console.error(...args);
+// Diagnostics-only logger (enabled when snap_params.debug_diag === true)
+const diag = (...args) => {
+  try {
+    if (window.snap_params && window.snap_params.debug_diag === true) {
+      console.log(...args);
+    }
+  } catch(_) {}
+};
 
 // Stable transaction hash function (ignores volatile fields)
 function stableTxHash(tx) {
@@ -143,6 +151,8 @@ window.SnapRender = {
     _domObserver: null,
     _observerCooldownUntil: 0,
     _guardedRenderActive: false,
+    _heartbeatCooldownUntil: 0,
+    _hbMisses: 0,
 
     _trackTimeout(fn, delay) {
         const id = setTimeout(() => {
@@ -230,9 +240,11 @@ window.SnapRender = {
         }
 
         // Guarded single-render gate: if we already have an initial render and validation is not OK, avoid re-render
+        // IMPORTANT: Do NOT suppress if the container is missing; we must re-render to restore it
         try {
             const pre = (window.Validation && window.Validation.preflight) ? window.Validation.preflight(window.snap_params) : { ok: true };
-            if (this._guardedRenderActive && pre && pre.ok === false) {
+            const containerPresent = !!document.getElementById(CONTAINER_ID);
+            if (this._guardedRenderActive && pre && pre.ok === false && containerPresent) {
                 const container = document.getElementById(CONTAINER_ID);
                 if (container) {
                     // Update overlay/messages only; keep current SDK render
@@ -508,7 +520,7 @@ window.SnapRender = {
                     if (!containerPresent) {
                         if (now < this._observerCooldownUntil) return;
                         this._observerCooldownUntil = now + 500; // 500ms cooldown
-                        console.log('🧭 Container missing → schedule one re-render');
+                        diag('🧭 Container missing → schedule one re-render');
                         this._trackTimeout(() => {
                             if (!this._idle && !this._cancelRequested) {
                                 this.render();
@@ -533,7 +545,7 @@ window.SnapRender = {
                             const tx = window.SnapTransaction?.build?.(window.snap_params) || null;
                             const msgs = window.SnapTransaction?.validate?.(tx, window.snap_params) || [];
                             this.updateValidationMessagesOnly(containerEl, msgs, tx);
-                            console.log('[Guard] Host briefly missing → updated overlay only (no re-render)');
+                            diag('[Guard] Host briefly missing → updated overlay only (no re-render)');
                         } catch(_) {}
                     }
                 } catch(_) {}
@@ -880,9 +892,13 @@ window.SnapRender = {
                             const configWithTarget = Object.assign({}, buttonConfig, { target: host });
                             console.log('🎯 Calling SDK with target host:', host);
                             snapuk.checkout.button(configWithTarget);
+                            try { this._earlyPinSvg(containerEl); } catch(_) {}
                         } catch (e) {
                             console.warn('⚠️ SDK call with target failed, trying without target:', e);
-                            try { snapuk.checkout.button(buttonConfig); } catch (e2) {
+                            try { 
+                                snapuk.checkout.button(buttonConfig);
+                                try { this._earlyPinSvg(containerEl); } catch(_) {}
+                            } catch (e2) {
                                 console.error('❌ SDK call completely failed:', e2);
                             }
                         }
@@ -892,8 +908,10 @@ window.SnapRender = {
                         // Activate guarded single-render mode after the first mount
                         if (!this._guardedRenderActive) {
                             this._guardedRenderActive = true;
-                            console.log('[Guard] Guarded render active');
+                            diag('[Guard] Guarded render active');
                         }
+                        // Start watchdog heartbeat to restore button if shadow/button disappears
+                        try { this._startHeartbeat(); } catch(_) {}
                         // PATCH: post-render verification (once)
                         this._trackTimeout(() => {
                             try {
@@ -962,15 +980,18 @@ window.SnapRender = {
                 // Show validation message
                 this.showValidationMessage(containerEl, validationMessages, transaction);
                 
-                // Add transparent overlay after Snap button renders; wait longer and only if shadow present
+                // Add transparent overlay after Snap button renders
+                // Classic: small initial delay (~150ms) to avoid early retries before shadow is ready
+                const isBlocks = !!(window.snap_params && window.snap_params.is_blocks);
+                const firstDelay = isBlocks ? 700 : 850; // 700 + 150ms for Classic
                 this._trackTimeout(() => {
                     if (containerEl.shadowRoot) {
-                    this.addValidationOverlay(containerEl, validationMessages, transaction);
+                        this.addValidationOverlay(containerEl, validationMessages, transaction);
                     } else {
                         // Try a bit later if shadow root isn't ready yet
                         this._trackTimeout(() => this.addValidationOverlay(containerEl, validationMessages, transaction), 700);
                     }
-                }, 700); // Wait for Snap button to render
+                }, firstDelay); // Wait for Snap button to render
             } else {
                 console.log('✅ VALIDATION PASSED: No overlay needed - Snap button ready to use');
                 
@@ -1034,38 +1055,66 @@ window.SnapRender = {
      * @param {Object} transaction - Transaction data for debugging
      */
     showValidationMessage(containerEl, messages, transaction) {
-        // Check if user has interacted before showing warnings
+        // Allow shipping errors to show even without prior user interaction (higher severity)
         const hasInteracted = window.FormMonitorUtil?.hasUserInteracted?.() || false;
-        console.log('Warning shown?', hasInteracted && messages.length > 0);
-        console.log('🔍 Interaction check - hasInteracted:', hasInteracted, 'messages.length:', messages.length);
-        
-        if (!hasInteracted && messages.length > 0) {
-            console.log('⏱️ Skipping validation message - no user interaction yet');
-            return; // Don't show warnings until user interacts
+        const hasShippingError = (messages || []).some(m => /shipping/i.test(String(m)));
+        if (!hasInteracted && (messages?.length || 0) > 0 && !hasShippingError) {
+            diag('⏱️ Skipping validation message - no user interaction yet (non-shipping)');
+            return;
         }
-        
-        // Clear any existing validation messages first
-        this.clearValidationMessage(containerEl);
-        
-        // Create validation message element with unique ID
-        const messageList = messages.map(msg => `<li>${msg}</li>`).join('');
-        const validationDiv = document.createElement('div');
-        validationDiv.id = `snap-validation-message-${Date.now()}`;
-        validationDiv.innerHTML = `
-            <div style="color: #d63638; background: #fcf0f1; border: 1px solid #d63638; padding: 10px; border-radius: 4px; margin: 5px 0; font-size: 14px; width: 100%; box-sizing: border-box;">
+
+        // Progressive filtering: only show messages for fields that were interacted with (always allow shipping)
+        let msgs = Array.isArray(messages) ? messages.slice() : [];
+        try {
+          const interacted = (window.FormMonitorUtil && typeof window.FormMonitorUtil.getInteractedFields === 'function') ? window.FormMonitorUtil.getInteractedFields() : null;
+          if (interacted && interacted.size) {
+            msgs = msgs.filter(m => {
+              const s = String(m || '').toLowerCase();
+              if (s.includes('shipping')) return true; // Always surface shipping issues
+              if (s.includes('terms')) return true; // Always surface terms & conditions
+              if (s.includes('first name')) return interacted.has('billing_first_name');
+              if (s.includes('last name')) return interacted.has('billing_last_name');
+              if (s.includes('email')) return interacted.has('billing_email');
+              if (s.includes('mobile')) return interacted.has('billing_phone');
+              if (s.includes('postcode')) return interacted.has('billing_postcode');
+              if (s.includes('address') && !s.includes('shipping')) return interacted.has('billing_address_1');
+              if (s.includes('city') && !s.includes('shipping')) return interacted.has('billing_city');
+              if (s.includes('terms')) return interacted.has('terms');
+              return true; // fallback
+            });
+          }
+        } catch(_) {}
+
+        // Do not render a header-only box when there are no concrete messages
+        if (!msgs || msgs.length === 0) {
+            try { this.clearValidationMessage(containerEl); } catch(_) {}
+            diag('ℹ️ No specific validation messages to show; skipping banner');
+            return;
+        }
+
+        // Build content once
+        const messageList = (msgs || []).map(msg => `<li>${msg}</li>`).join('');
+        const inner = `
+            <div style="color: #d63638; background: #fcf0f1; border: 1px solid #d63638; padding: 1px 10px 10px; border-radius: 4px; margin: 14px 0 5px; font-size: 14px; width: 100%; box-sizing: border-box;">
                 <strong>⚠️ Please complete required fields:</strong>
                 <ul style="margin: 5px 0; padding-left: 20px; font-size: 13px;">
                     ${messageList}
                 </ul>
-            </div>
-        `;
-        
-        // Insert validation message before the Snap button container
-        containerEl.parentNode.insertBefore(validationDiv, containerEl);
-        
-        // Log transaction object for debugging
-        console.log('🔍 Validation message shown - Transaction object:', transaction);
-        console.log('🔍 Validation errors:', messages);
+            </div>`;
+
+        // Update existing singleton message if present to avoid flicker
+        const parent = containerEl.parentNode || document.body;
+        let validationDiv = parent.querySelector('#snap-validation-message');
+        if (validationDiv) {
+            if (validationDiv.innerHTML !== inner) validationDiv.innerHTML = inner;
+        } else {
+            validationDiv = document.createElement('div');
+            validationDiv.id = 'snap-validation-message';
+            validationDiv.innerHTML = inner;
+            parent.insertBefore(validationDiv, containerEl);
+        }
+
+        diag('🔍 Validation message shown/updated');
     },
 
     /**
@@ -1074,7 +1123,7 @@ window.SnapRender = {
      */
     clearValidationMessage(containerEl) {
         // Clear ALL validation messages (not just the first one)
-        const validationMessages = document.querySelectorAll('[id^="snap-validation-message"]');
+        const validationMessages = document.querySelectorAll('#snap-validation-message, [id^="snap-validation-message-"]');
         validationMessages.forEach(msg => {
             msg.remove();
             console.log('✅ Validation message cleared:', msg.id);
@@ -1238,7 +1287,7 @@ window.SnapRender = {
      * @param {Object} transaction - Transaction data
      */
     addValidationOverlay(containerEl, validationMessages, transaction) {
-        console.log('🔍 Adding validation overlay to Snap button...');
+        diag('🔍 Adding validation overlay to Snap button...');
         
         // Always clear any existing overlay before adding a new one
         try { this.removeValidationOverlay(containerEl); } catch(_) {}
@@ -1258,7 +1307,7 @@ window.SnapRender = {
             const hostEl = containerEl.querySelector('.snapuk-host');
             const shadowRoot = hostEl?.shadowRoot || containerEl.shadowRoot || null;
             if (shadowRoot) {
-                console.log('🔍 Searching Shadow DOM for Snap button...');
+                diag('🔍 Searching Shadow DOM for Snap button...');
                 snapButton = shadowRoot.querySelector('#snapuk-checkout-btn') ||
                             shadowRoot.querySelector('.snapuk-btn') ||
                             shadowRoot.querySelector('.snap-checkout-btn') ||
@@ -1268,21 +1317,21 @@ window.SnapRender = {
                             shadowRoot.querySelector('div[role="button"]');
                 
                 if (snapButton) {
-                    console.log('✅ Found Snap button in Shadow DOM:', snapButton);
+                    diag('✅ Found Snap button in Shadow DOM:', snapButton);
                 }
             }
         }
         
         if (!snapButton) {
-            console.log('⚠️ Snap button not found for overlay - will retry with multiple approaches');
+            diag('⚠️ Snap button not found for overlay - will retry with multiple approaches');
             
             // Try multiple retry strategies
-            const maxRetries = 10;
+            const maxRetries = 5; // escalate sooner
             let retryCount = 0;
             
             const retryWithDelay = () => {
                 retryCount++;
-                console.log(`🔄 Retry attempt ${retryCount}/${maxRetries} for finding Snap button`);
+                diag(`🔄 Retry attempt ${retryCount}/${maxRetries} for finding Snap button`);
                 
                 // Try to find button again
                 let foundButton = containerEl.querySelector('#snapuk-checkout-btn') ||
@@ -1306,7 +1355,7 @@ window.SnapRender = {
                 }
                 
                 if (foundButton) {
-                    console.log('✅ Found Snap button on retry:', foundButton);
+                    diag('✅ Found Snap button on retry:', foundButton);
                     // Recursively call this function with the found button
                     this.addValidationOverlay(containerEl, validationMessages, transaction);
                 } else if (retryCount < maxRetries) {
@@ -1314,9 +1363,22 @@ window.SnapRender = {
                     const delay = 500 + (retryCount * 500);
                     this._trackTimeout(retryWithDelay, delay);
                 } else {
-                    console.error('❌ Failed to find Snap button after all retries - adding overlay to container anyway');
-                    // Add overlay to container as fallback
-                    this.addOverlayToContainer(containerEl, validationMessages, transaction);
+                    // Only escalate when overall preflight is OK; otherwise use container-level overlay
+                    try {
+                        const pre = (window.Validation && window.Validation.preflight) ? window.Validation.preflight(window.snap_params) : { ok: false };
+                        if (pre && pre.ok) {
+                            console.error('❌ Failed to find Snap button after retries — escalating to guarded re-render');
+                            this._guardedRenderActive = false;
+                            this._forceFullRenderNext = true;
+                            this._sdkButtonMounted = false;
+                            this.render();
+                        } else {
+                            diag('⚠️ Button not found and preflight invalid — adding fallback overlay to container');
+                            this.addOverlayToContainer(containerEl, validationMessages, transaction);
+                        }
+                    } catch(_) {
+                        this.addOverlayToContainer(containerEl, validationMessages, transaction);
+                    }
                 }
             };
             
@@ -1324,7 +1386,7 @@ window.SnapRender = {
             return;
         }
         
-        console.log('✅ Found Snap button for overlay:', snapButton);
+        diag('✅ Found Snap button for overlay:', snapButton);
         
         // Create transparent overlay
         const overlay = document.createElement('div');
@@ -1422,7 +1484,7 @@ window.SnapRender = {
         const shadowRoot = containerEl.shadowRoot;
         if (shadowRoot && snapButton && shadowRoot.contains(snapButton)) {
             // Button is in Shadow DOM, add overlay to Shadow DOM
-            console.log('✅ Adding overlay to Shadow DOM');
+            diag('✅ Adding overlay to Shadow DOM');
             
             // Ensure Shadow DOM container has relative positioning
             const shadowContainer = shadowRoot.querySelector('div') || shadowRoot.firstElementChild;
@@ -1433,7 +1495,7 @@ window.SnapRender = {
             shadowRoot.appendChild(overlay);
                     } else {
             // Button is in regular DOM, add overlay to regular container
-            console.log('✅ Adding overlay to regular DOM');
+            diag('✅ Adding overlay to regular DOM');
             
             // Ensure container has relative positioning for absolute overlay
             if (getComputedStyle(containerEl).position === 'static') {
@@ -1443,7 +1505,7 @@ window.SnapRender = {
             containerEl.appendChild(overlay);
         }
         
-        console.log('✅ Validation overlay added successfully');
+        diag('✅ Validation overlay added successfully');
     },
 
     /**
@@ -1453,7 +1515,7 @@ window.SnapRender = {
      * @param {Object} transaction - Transaction data
      */
     addOverlayToContainer(containerEl, validationMessages, transaction) {
-        console.log('🔧 Adding targeted fallback overlay to button area');
+        diag('🔧 Adding targeted fallback overlay to button area');
         // Always clear any existing overlay before adding a new one
         try { this.removeValidationOverlay(containerEl); } catch(_) {}
         
@@ -1482,7 +1544,7 @@ window.SnapRender = {
         for (const selector of possibleSelectors) {
             buttonContainer = containerEl.querySelector(selector);
             if (buttonContainer) {
-                console.log('✅ Found button container with selector:', selector);
+                diag('✅ Found button container with selector:', selector);
                 break;
             }
         }
@@ -1492,7 +1554,7 @@ window.SnapRender = {
         
         if (buttonContainer) {
             // Overlay the specific button container
-            console.log('✅ Creating overlay for specific button container');
+            diag('✅ Creating overlay for specific button container');
             overlay = document.createElement('div');
             overlay.id = 'snap-validation-overlay';
             overlay.style.cssText = `
@@ -1512,7 +1574,7 @@ window.SnapRender = {
             `;
             } else {
             // Create a targeted overlay that covers just the button area
-            console.log('🔧 Creating targeted button area overlay');
+            diag('🔧 Creating targeted button area overlay');
             overlay = document.createElement('div');
             overlay.id = 'snap-validation-overlay';
             overlay.style.cssText = `
@@ -1602,14 +1664,14 @@ window.SnapRender = {
                 buttonContainer.style.position = 'relative';
             }
             buttonContainer.appendChild(overlay);
-            console.log('✅ Fallback overlay added to specific button container');
+            diag('✅ Fallback overlay added to specific button container');
                     } else {
             // Add overlay to the main container
             if (getComputedStyle(containerEl).position === 'static') {
                 containerEl.style.position = 'relative';
             }
             containerEl.appendChild(overlay);
-            console.log('✅ Fallback overlay added to main container (targeted area)');
+            diag('✅ Fallback overlay added to main container (targeted area)');
         }
     },
 
@@ -1631,9 +1693,9 @@ window.SnapRender = {
         
         if (overlay) {
             overlay.remove();
-            console.log('✅ Validation overlay removed');
+            diag('✅ Validation overlay removed');
         } else {
-            console.log('⚠️ No validation overlay found to remove');
+            diag('⚠️ No validation overlay found to remove');
         }
     },
 
@@ -1696,9 +1758,9 @@ window.SnapRender = {
                 </div>
             `;
             
-            console.log('✅ Validation overlay updated with new messages:', validationMessages);
+            diag('✅ Validation overlay updated with new messages:', validationMessages);
         } else {
-            console.log('⚠️ No validation overlay found to update');
+            diag('⚠️ No validation overlay found to update');
         }
     },
 
@@ -1708,7 +1770,7 @@ window.SnapRender = {
      * @param {Array} improvedFields - Array of field names that improved
      */
     clearFieldWarnings(containerEl, improvedFields) {
-        console.log('🎯 Clearing warnings for improved fields:', improvedFields);
+        diag('🎯 Clearing warnings for improved fields:', improvedFields);
         
         // Clear field highlighting for improved fields
         if (window.SnapTransaction && window.SnapTransaction.clearFieldHighlighting) {
@@ -1717,7 +1779,7 @@ window.SnapRender = {
         
         // Note: The validation message box is updated separately via updateValidationOverlay
         // This method focuses on field-specific visual feedback
-        console.log('✅ Field warnings cleared for:', improvedFields);
+        diag('✅ Field warnings cleared for:', improvedFields);
     },
 
     /**
@@ -1727,7 +1789,7 @@ window.SnapRender = {
      * @param {Object} transaction - Transaction data
      */
     updateValidationMessagesOnly(containerEl, validationMessages, transaction) {
-        console.log('🔄 Updating validation messages only (no re-render):', validationMessages);
+        diag('🔄 Updating validation messages only (no re-render):', validationMessages);
         
         if (validationMessages && validationMessages.length > 0) {
             // Show validation message and add overlay
@@ -1790,6 +1852,85 @@ window.SnapRender = {
             `;
             sr.appendChild(s);
         } catch (_) {}
+    },
+
+    // Early SVG size pin to avoid initial flash when SDK hasn't set attributes yet
+    _earlyPinSvg(containerEl) {
+        try {
+            const tryPin = () => {
+                try {
+                    const host = containerEl.querySelector('.snapuk-host') || containerEl;
+                    const sr = (host && (host.shadowRoot || null)) || containerEl.shadowRoot || null;
+                    if (!sr) return false;
+                    const svg = sr.querySelector('svg');
+                    if (!svg) return false;
+                    if (!svg.getAttribute('width')) svg.setAttribute('width', '320');
+                    if (!svg.getAttribute('height')) svg.setAttribute('height', '45');
+                    diag('🔧 Early SVG pin applied');
+                    return true;
+                } catch (_) { return false; }
+            };
+            if (tryPin()) return;
+            let attempts = 25; // ~500ms total with 20ms steps
+            const tick = () => {
+                if (this._idle || this._cancelRequested) return;
+                if (tryPin()) return;
+                if (--attempts > 0) {
+                    this._trackTimeout(tick, 20);
+                }
+            };
+            this._trackTimeout(tick, 0);
+        } catch (_) {}
+    },
+
+    // Heartbeat: periodically ensure button/shadow exists; restore if missing
+    _startHeartbeat() {
+        const loop = () => {
+            if (this._idle || this._cancelRequested) return; // paused when not selected
+            try {
+                const isActive = window.PaymentMethodDetector?.isSnapFinanceSelected?.() || false;
+                if (!isActive) { this._trackTimeout(loop, 3000); return; }
+                const container = document.getElementById(CONTAINER_ID);
+                if (!container) {
+                    // Container missing → re-render once (respect cooldown)
+                    const now = Date.now();
+                    if (now >= this._heartbeatCooldownUntil && !this._isRendering) {
+                        this._heartbeatCooldownUntil = now + 1500;
+                        this._guardedRenderActive = false;
+                        this._forceFullRenderNext = true;
+                        diag('[Heartbeat] Container missing → re-render');
+                        try { this.render(); } catch(_) {}
+                    }
+                    this._trackTimeout(loop, 2000);
+                    return;
+                }
+                // Check shadow/button presence
+                const host = container.querySelector('.snapuk-host') || container;
+                const sr = (host && (host.shadowRoot || null)) || container.shadowRoot || null;
+                const btn = sr && (sr.getElementById('snapuk-checkout-btn') || sr.querySelector('button'));
+                if (!sr || !btn) {
+                    // require two consecutive misses OR an overall valid preflight before re-render
+                    this._hbMisses = (this._hbMisses || 0) + 1;
+                    const now = Date.now();
+                    let pre = null;
+                    try { pre = (window.Validation && window.Validation.preflight) ? window.Validation.preflight(window.snap_params) : { ok: false }; } catch(_) { pre = { ok: false }; }
+                    if ((this._hbMisses >= 2 || (pre && pre.ok)) && now >= this._heartbeatCooldownUntil && !this._isRendering) {
+                        this._heartbeatCooldownUntil = now + 1500;
+                        this._sdkButtonMounted = false;
+                        this._guardedRenderActive = false; // allow a refresh
+                        this._forceFullRenderNext = true;
+                        diag('[Heartbeat] Shadow/button missing (sustained or valid preflight) → re-render');
+                        try { this.render(); } catch(_) {}
+                    }
+                } else {
+                    // healthy
+                    this._hbMisses = 0;
+                }
+            } catch(_) {}
+            this._trackTimeout(loop, 2000);
+        };
+        // Kick off or continue
+        this._trackTimeout(loop, 2000);
     },
 
 

@@ -6,8 +6,51 @@
 (function() {
     'use strict';
 
-    // Module-level flag to track user interaction
+    // Module-level flags to track user interaction
     let hasInteracted = false;
+    const interactedFields = new Set(); // e.g., 'billing_first_name', 'billing_email'
+
+    function trackFieldInteraction(fieldName) {
+        try {
+            if (!fieldName) return;
+            interactedFields.add(String(fieldName));
+            hasInteracted = true;
+        } catch(_) {}
+    }
+
+    function getInteractedFields() {
+        return new Set(interactedFields);
+    }
+
+    // Map message text to canonical field names
+    function inferFieldFromMessage(msg) {
+        const m = String(msg || '').toLowerCase();
+        if (/shipping/.test(m)) return 'shipping';
+        if (/first name/.test(m)) return 'billing_first_name';
+        if (/last name/.test(m)) return 'billing_last_name';
+        if (/email/.test(m)) return 'billing_email';
+        if (/mobile|phone/.test(m)) return 'billing_phone';
+        if (/postcode/.test(m) && !/shipping/.test(m)) return 'billing_postcode';
+        if (/address\b/.test(m) && !/shipping/.test(m)) return 'billing_address_1';
+        if (/\bcity\b/.test(m) && !/shipping/.test(m)) return 'billing_city';
+        if (/terms/.test(m)) return 'terms';
+        return null;
+    }
+
+    function filterMessagesByInteraction(messages) {
+        try {
+            const msgs = Array.isArray(messages) ? messages : [];
+            if (msgs.length === 0) return msgs;
+            const seen = getInteractedFields();
+            // Always allow shipping-related errors to surface to avoid missed delivery issues
+            return msgs.filter((msg) => {
+                const f = inferFieldFromMessage(msg);
+                if (f === 'shipping') return true;
+                if (f === 'terms') return true; // Always surface terms & conditions message
+                return !!(f && seen.has(f));
+            });
+        } catch(_) { return Array.isArray(messages) ? messages : []; }
+    }
 
     const FormMonitorUtil = {
         /**
@@ -23,11 +66,15 @@
                     ? window.Validation.preflight(window.snap_params)
                     : { ok: true, messages: [] };
                 if (!pre.ok) {
-                    try { window.SnapRender?.showValidationMessage?.(container, pre.messages && pre.messages.length ? pre.messages : [pre.message], pre.tx || {}); } catch(_) {}
+                    // Progressive UX: only show messages for fields the user interacted with; always show shipping
+                    const uiMessages = filterMessagesByInteraction(pre.messages && pre.messages.length ? pre.messages : [pre.message]);
+                    try { window.SnapRender?.showValidationMessage?.(container, uiMessages, pre.tx || {}); } catch(_) {}
                     try {
                         if (Array.isArray(pre.snapMessages) && window.SnapTransaction?.highlightMissingFields) {
                             window.SnapTransaction.clearFieldHighlighting?.();
-                            window.SnapTransaction.highlightMissingFields(pre.snapMessages);
+                            // Also filter Snap messages for highlighting to match progressive UX
+                            const filteredSnap = filterMessagesByInteraction(pre.snapMessages);
+                            window.SnapTransaction.highlightMissingFields(filteredSnap);
                         }
                     } catch(_) {}
                 } else {
@@ -65,10 +112,8 @@
                         const selectedRadio = document.querySelector('input[name="payment_method"]:checked');
                         const selectedMethod = selectedRadio ? selectedRadio.value : null;
                         if (selectedMethod === 'snapfinance_refined') {
-                            if (!hasInteracted) {
-                                hasInteracted = true;
-                                console.log('✅ First interaction detected - enabling warnings');
-                            }
+                            trackFieldInteraction(fieldName);
+                            if (hasInteracted) console.log('✅ Interaction detected - enabling progressive warnings');
                             const fieldValue = (t && 'value' in t) ? String(t.value) : '';
                             console.log(`🔄 Form field changed: ${fieldName} = "${fieldValue}" - re-validating Snap Finance`);
                             // Reflect centralized validation immediately
@@ -93,19 +138,20 @@
                 const selectedRadio = document.querySelector('input[name="payment_method"]:checked');
                 if (!selectedRadio || selectedRadio.value !== 'snapfinance_refined') return;
                 let changed = false;
+                let lastTarget = null;
                 mutations.forEach((m) => {
                     if (m.type === 'attributes' && m.attributeName === 'class') {
                         const el = m.target;
                         const hasInvalid = el.classList.contains('woocommerce-invalid') || el.classList.contains('woocommerce-invalid-required-field');
                         const isValidated = el.classList.contains('woocommerce-validated');
                         if (hasInvalid || isValidated) changed = true;
+                        lastTarget = el;
                     }
                 });
                 if (changed) {
-                    if (!hasInteracted) {
-                        hasInteracted = true;
-                        console.log('✅ First interaction detected (classic validation) - enabling warnings');
-                    }
+                    // Mark as interacted for progressive messaging
+                    try { const nm = (lastTarget && lastTarget.name) ? lastTarget.name : null; if (nm) trackFieldInteraction(nm); } catch(_) {}
+                    if (!hasInteracted) console.log('✅ First interaction detected (classic validation) - enabling warnings');
                     // Reflect centralized validation immediately
                     this.runPreflightAndDisplay();
                     debouncedReValidate();
@@ -176,7 +222,7 @@
         monitorWooCommerceValidation(reValidateAndRender) {
             console.log('🔍 Setting up event-driven WooCommerce validation monitoring');
             
-            let hasInteracted = false;
+            let hasInteractedBlocks = false;
             let monitoringActive = true;
 
             // CRITICAL GATE: Check if Snap Finance is selected
@@ -196,8 +242,8 @@
                 
                 try {
                     // Mark first interaction
-                    if (!hasInteracted) {
-                        hasInteracted = true;
+                    if (!hasInteractedBlocks) {
+                        hasInteractedBlocks = true;
                         console.log('✅ First interaction detected (event-driven) - enabling warnings');
                     }
                     
@@ -234,16 +280,20 @@
                     // Listen to input events
                     fieldElement.addEventListener('input', () => {
                         console.log(`🔄 Input event on ${field.name}: "${fieldElement.value}"`);
+                        trackFieldInteraction(field.name);
                         handleValidationChange(field.name, fieldElement);
                     });
                     
                     fieldElement.addEventListener('blur', () => {
                         console.log(`🔄 Blur event on ${field.name}: "${fieldElement.value}"`);
+                        trackFieldInteraction(field.name);
                         handleValidationChange(field.name, fieldElement);
                     });
                     
                     fieldElement.addEventListener('focus', () => {
                         console.log(`🔄 Focus event on ${field.name}`);
+                        // Focus counts as interest in the field
+                        trackFieldInteraction(field.name);
                         handleValidationChange(field.name, fieldElement);
                     });
                 } else {
@@ -417,6 +467,13 @@
                 clearTimeout(timeout);
                 timeout = setTimeout(later, wait);
             };
+        },
+
+        /**
+         * Expose interacted fields for progressive filtering in renderer
+         */
+        getInteractedFields() {
+            return getInteractedFields();
         }
     };
 

@@ -122,6 +122,87 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
 
   const SnapApplication = {
     /**
+     * Attach current application to server-side draft order
+     */
+    async attachApplication(appId, status, invoice = '') {
+      try {
+        // Build a lightweight billing snapshot to hydrate draft order details
+        let billing = {};
+        let shipping = {};
+        try {
+          if (window.SnapTransaction && typeof window.SnapTransaction.getCustomer === 'function') {
+            const c = window.SnapTransaction.getCustomer(window.snap_params || {});
+            billing = {
+              billing_first_name: c.firstName || '',
+              billing_last_name:  c.lastName  || '',
+              billing_email:      c.email     || '',
+              billing_phone:      c.mobileNumber || '',
+              billing_address_1:  c.streetAddress || '',
+              billing_address_2:  c.unit || '',
+              billing_city:       c.city || '',
+              billing_postcode:   c.postcode || ''
+            };
+          }
+          // Read Classic DOM for shipping if present (Blocks may not expose separate shipping fields)
+          const get = (sel) => { try { const el = document.querySelector(sel); return el ? String(el.value || '').trim() : ''; } catch(_) { return ''; } };
+          const shipDifferent = (() => { try { const cb = document.querySelector('#ship-to-different-address-checkbox'); return !!(cb && cb.checked); } catch(_) { return false; } })();
+          if (shipDifferent) {
+            shipping = {
+              shipping_first_name: get('#shipping_first_name'),
+              shipping_last_name:  get('#shipping_last_name'),
+              shipping_address_1:  get('#shipping_address_1'),
+              shipping_address_2:  get('#shipping_address_2'),
+              shipping_city:       get('#shipping_city'),
+              shipping_postcode:   get('#shipping_postcode')
+            };
+          }
+
+          // Shipping method (Classic): capture selected rate id and label
+          try {
+            const sm = document.querySelector('input[name^="shipping_method"]:checked');
+            if (sm) {
+              const methodId = String(sm.value || '').trim();
+              let methodTitle = '';
+              try { const lbl = document.querySelector(`label[for="${sm.id}"]`); methodTitle = lbl ? String(lbl.textContent || '').trim() : ''; } catch(_) {}
+              if (methodId) {
+                shipping.shipping_method_id = methodId;
+                if (methodTitle) shipping.shipping_method_title = methodTitle;
+              }
+            }
+          } catch(_) {}
+
+          // Customer order note (Classic)
+          try {
+            const note = get('#order_comments');
+            if (note) { billing.order_note = note; }
+          } catch(_) {}
+        } catch(_) {}
+        const res = await fetch('/wp-json/snap/v1/attach', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-WP-Nonce': window.snap_params?.rest_nonce || window.snap_params?.restNonce || window.wpApiSettings?.nonce || ''
+          },
+          credentials: 'same-origin',
+          body: JSON.stringify(Object.assign({ application_id: appId, progress_status: status, invoice_number: invoice }, billing, shipping))
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || !json?.order_id) {
+          console.log('[Snap] ❌ attach failed:', {
+            reason: json?.code || json?.reason || 'unknown',
+            response: json,
+            note: 'Expected in Classic until draft exists'
+          });
+          return false;
+        }
+        console.log('[Snap] ✅ attach success:', { order_id: json.order_id, status });
+        return true;
+      } catch (e) {
+        console.log('[Snap] ❌ attach error:', { error: e?.message });
+        return false;
+      }
+    },
+    /**
      * Detect order confirmation page and perform client cleanup.
      * Clears local Snap app state to avoid reusing a funded app on a later order.
      */
@@ -342,45 +423,8 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
           try { this.forceChosenSnap(); } catch(_) {}
         });
 
-        // Fire-and-forget attach request (bind to existing draft; no creation)
-        try {
-          const nonce = window.snap_params?.rest_nonce || window.snap_params?.restNonce || window.wpApiSettings?.nonce || '';
-          const orderKey = (window?.wc && wc.orderKey) || (window?.wc_checkout_params && wc_checkout_params.order_key) || null;
-          const snapInvoice = window.snap_params?.transaction?.invoiceNumber || null;
-          const attachPayload = { application_id: appId, invoice_number: snapInvoice, order_key: orderKey };
-          
-          console.log('[Snap] 🔗 Attempting to attach application to order:', {
-            app_id: appId,
-            snap_invoice: snapInvoice,
-            order_key: orderKey || '(none)',
-            note: 'This is Snap transaction ID, NOT WooCommerce order number'
-          });
-          
-          fetch('/wp-json/snap/v1/attach', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-WP-Nonce': nonce },
-            credentials: 'same-origin',
-            body: JSON.stringify(attachPayload)
-          })
-          .then(r => r.json()).then(j => { 
-            if (!j?.ok) {
-              console.error('[Snap] ❌ attach failed:', { 
-                reason: j.reason, 
-                response: j,
-                note: 'Check WooCommerce logs for attach_failed entries'
-              }); 
-            } else {
-              console.log('[Snap] ✅ attach successful:', { 
-                order_id: j.order_id, 
-                lookup_method: j.lookup_method,
-                response: j 
-              });
-            }
-          })
-          .catch(e => console.error('[Snap] ❌ attach network exception:', e));
-        } catch(e) {
-          console.error('[Snap] ❌ attach setup exception:', e);
-        }
+        // Attach CREATED (2)
+        try { this.attachApplication(appId, 2, window.snap_params?.transaction?.invoiceNumber || ''); } catch(_) {}
 
         // Start URL watcher so we can detect both success and denied routes
         try { __startUrlCompletionWatcher(appId, token, (id, tk) => this.onSuccess(id, tk)); } catch(_) {}
@@ -401,7 +445,9 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
         this.setApp({ id: appId, token: token, status: 'approved' });
         // ensure blocking is active
         this.blockCheckoutSubmission();
-      // NEW: Poll server status immediately to capture progress 6 (approved) in logs
+      // Attach APPROVED (6)
+      try { this.attachApplication(appId, 6, window.snap_params?.transaction?.invoiceNumber || ''); } catch(_) {}
+      // Poll server status immediately to capture progress 6 (approved) in logs
       try { this.logServerStatus(appId, token, 'callback:onApproved'); } catch(_) {}
       // Optional brief re-poll to catch fast transitions 6→26
       setTimeout(() => { try { this.logServerStatus(appId, token, 'callback:onApproved+1s'); } catch(_) {} }, 1000);
@@ -443,6 +489,8 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
         // Also show the latest server status in logs before finalize
         await this.logServerStatus(appId, token, 'beforeFinalize');
 
+        // Attach SIGNED (26) before finalize
+        try { await this.attachApplication(appId, 26, (window.snap_params?.transaction?.invoiceNumber || '')); } catch(_) {}
         // Finalize via REST first; only on failure consider UI submit
         const current = this.getApp();
         if (!current?.submitted) {
@@ -470,6 +518,8 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
       // Keep checkout submission blocked while Snap is selected
       this.blockCheckoutSubmission();
 
+      // Attach DECLINED (14)
+      try { this.attachApplication(appId, 14, window.snap_params?.transaction?.invoiceNumber || ''); } catch(_) {}
       // Notify server so the attached order is marked failed (no redirect)
       try {
         const nonce = window.snap_params?.rest_nonce || window.snap_params?.restNonce || window.wpApiSettings?.nonce || '';
@@ -483,6 +533,35 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
         }).then(r => r.json()).then(j => {
           console.log('🛰️ [denied] Server update result', j);
         }).catch(e => console.warn('🛰️ [denied] Server update failed', e));
+      } catch(_) {}
+
+      // Provide UI affordance to start a new application: clear server session then allow button
+      try {
+        const clearUrl = (window.snap_params && window.snap_params.ajax_url) ? window.snap_params.ajax_url : '/?wc-ajax=snap_clear_application';
+        const isAdminAjax = /admin-ajax\.php/.test(clearUrl);
+        if (isAdminAjax) {
+          // admin-ajax style
+          fetch(clearUrl, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+            body: new URLSearchParams({ action: 'snap_clear_application' }).toString()
+          }).then(()=>{
+            // Clear client storage so SDK can start a fresh application id
+            try { this.resetApplicationStatus(); } catch(_) {}
+            // Keep blocked until a new app actually starts
+            try { this.blockCheckoutSubmission(); } catch(_) {}
+            // Inform the customer
+            this.showInlineMessage('Your previous Snap application was declined. You can start a new one using Check eligibility.', 'info');
+          }).catch(()=>{});
+        } else {
+          // direct wc-ajax endpoint
+          fetch('/?wc-ajax=snap_clear_application', { method: 'POST', credentials: 'same-origin' }).then(()=>{
+            try { this.resetApplicationStatus(); } catch(_) {}
+            try { this.blockCheckoutSubmission(); } catch(_) {}
+            this.showInlineMessage('Your previous Snap application was declined. You can start a new one using Check eligibility.', 'info');
+          }).catch(()=>{});
+        }
       } catch(_) {}
     },
 
@@ -812,6 +891,16 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
         
         // Clear any inline messages
         this.clearInlineMessages();
+        try {
+          // Also reset chosen payment method in Woo to avoid accidental drafts on return
+          const ajaxurl = (window.snap_params && window.snap_params.ajax_url) || window.ajaxurl || '/wp-admin/admin-ajax.php';
+          fetch(ajaxurl, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+            body: new URLSearchParams({ action: 'woocommerce_set_payment_method', payment_method: '' }).toString()
+          }).catch(()=>{});
+        } catch(_) {}
         
         console.log('🔄 Application status reset');
       }
