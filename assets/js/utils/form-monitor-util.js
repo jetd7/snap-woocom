@@ -124,6 +124,23 @@
                 });
             });
 
+            // Terms & Conditions listeners (Classic): immediately reflect validation when toggled
+            try {
+                const termsEl = document.querySelector('#terms');
+                if (termsEl) {
+                    const onTermsChange = () => {
+                        const selectedRadio = document.querySelector('input[name="payment_method"]:checked');
+                        const selectedMethod = selectedRadio ? selectedRadio.value : null;
+                        if (selectedMethod === 'snapfinance_refined') {
+                            trackFieldInteraction('terms');
+                            this.runPreflightAndDisplay();
+                            if (typeof reValidateAndRender === 'function') reValidateAndRender();
+                        }
+                    };
+                    ['change', 'click', 'keyup'].forEach(evt => termsEl.addEventListener(evt, onTermsChange, true));
+                }
+            } catch(_) {}
+
             // Observe WooCommerce validation class changes on Classic fields
             const classicSelectors = {
                 'billing_first_name': '[name="billing_first_name"]',

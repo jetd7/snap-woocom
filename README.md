@@ -1,4 +1,4 @@
-## Snap Finance WooCommerce Plugin (v1.0.37)
+## Snap Finance WooCommerce Plugin (v1.0.41)
 
 Production-ready Snap Finance UK gateway for WooCommerce (Classic & Blocks). Designed for clarity, security, and a clean user journey.
 
@@ -408,6 +408,44 @@ CREATE TABLE wp_snap_application_details (
 - Security enhancements
 
 ## 📋 **Changelog**
+
+### v1.0.38 (2025-10-24)
+- Draft idempotency: one Woo draft per Snap application. If a draft already belongs to another app, it’s skipped. If none exists, a new `checkout-draft` is created for this app and hydrated.
+- Hydration on create: billing, optional shipping, shipping method (id/title) and customer note are applied to the new draft; totals recalculated.
+- Session hygiene: clear `chosen_payment_method` on finalize to prevent stale method reuse. Early draft creation now requires an existing `snap_application` in session (prevents stray orders).
+
+### v1.0.39 (2025-10-24)
+- Classic T&Cs: live re-validation on checkbox change; skip stale Woo terms banners when now checked.
+- Renderer: clear Woo error banners when preflight passes; rebuild transaction just before SDK call for freshest data.
+- Classic guard: block Place order when Snap selected; inline guidance to use Check eligibility.
+- Takeover: wc‑ajax `snap_takeover` clears non‑Snap awaiting payment and sets Snap as chosen. Subtle bump added for Blocks.
+- Attach cascade: if no usable draft, create fresh `checkout-draft` and add note “Snap takeover from non‑Snap session (Classic/Blocks)”.
+
+### v1.0.40 (2025-10-24)
+- Status-coded order notes for all statuses ([2],[6],[10],[18],[22],[26],[30],[0],[-1]) with short descriptions.
+- Withdrawn (18): two-line customer guidance inline; keep Snap blocked; order shows “[18] Withdrawn — …”.
+- Error/Unknown (-1): technical delay message inline; keep Snap blocked; order shows “[-1] Error/Unknown — …”.
+
+### v1.0.41 (2025-10-24)
+- Draft creation fallback: when /attach must create a new draft and the cart is empty, add a one‑off “Snap Purchase” fee sized by a total snapshot so orders don’t finalize at £0.
+- Total snapshot: captured client‑side on application start and passed to /attach; used as a safety fallback in /funded if the target order still has no items/total.
+- Draft creation: when cart items exist at attach time, copy line items into the new draft and recalculate totals.
+
+### v1.0.37 (2025-10-24)
+- Client reset polish: when resetting the Snap application client-side, also clear Woo’s chosen payment method via admin‑ajax to avoid accidental drafts.
+
+### v1.0.36 (2025-10-24)
+- Attach hydration (Classic): send and set shipping address (when "Ship to a different address" is checked), shipping method id/title, and customer order note to populate the draft immediately.
+- Validation UX: always surface Terms & Conditions message; merge live DOM field values over server params so the popup receives the latest customer data.
+- Phone normalization: convert +44/0044/44 UK numbers to leading 0 (e.g., +447... → 07...).
+- Styling: added caret spacing for inline info (blue) messages to avoid overlap with theme diamond caret.
+
+### v1.0.35 (2025-10-23)
+- Denied flow: added wc‑ajax `snap_clear_application` endpoint; on denied, session is cleared to allow starting a fresh application without affecting existing orders.
+
+### v1.0.34 (2025-10-23)
+- Server checkout guard: success/redirect allowed only on FUNDED/COMPLETE (0/30). Removed generic “complete popup” server notice; non‑funded states fail silently and let the UI guide/launch.
+- Validation rendering: suppress header‑only “Please complete required fields” banner when there are no concrete items.
 
 ### v1.0.11 (October 6, 2025)
 - **CLEANUP**: Removed unused `snap-focus-guard.js` file (no longer needed after resolving plugin conflicts)

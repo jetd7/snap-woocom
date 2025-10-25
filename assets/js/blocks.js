@@ -540,7 +540,19 @@ console.log('🔧 Snap Finance Blocks Checkout Handler Loaded:', (window.snap_pa
         mo.observe(document.body, { childList: true, subtree: true });
         scheduleTryUntilRendered();
         window.addEventListener('snapfinance:deselected', () => { try { window.SnapRender?.goIdle?.(); } catch(_) {} });
-        window.addEventListener('snapfinance:selected', () => { try { window.SnapRender?.resumeActive?.(); scheduleTryUntilRendered(); } catch(_) {} });
+        window.addEventListener('snapfinance:selected', () => {
+            try {
+                // Subtle takeover bump: clear stale awaiting payment and set Snap as chosen method
+                const ajaxurl = (window.snap_params && window.snap_params.ajax_url) || window.ajaxurl || '/wp-admin/admin-ajax.php';
+                fetch(ajaxurl, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+                    body: new URLSearchParams({ action: 'snap_takeover' }).toString()
+                }).catch(()=>{});
+            } catch(_) {}
+            try { window.SnapRender?.resumeActive?.(); scheduleTryUntilRendered(); } catch(_) {}
+        });
     }
 
     // Register payment method

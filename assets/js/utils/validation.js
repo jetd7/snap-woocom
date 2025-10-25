@@ -18,7 +18,15 @@
       selectors.forEach(sel => {
         document.querySelectorAll(sel).forEach(n => {
           if (n && n.textContent && n.offsetParent !== null) {
-            msgs.push(String(n.textContent).trim());
+            const txt = String(n.textContent).trim();
+            // Skip Woo terms error if the terms are currently checked (stale banner)
+            try {
+              const termsChecked = !!document.querySelector('#terms')?.checked;
+              if (termsChecked && /terms/i.test(txt)) {
+                return; // ignore stale terms error
+              }
+            } catch(_) {}
+            msgs.push(txt);
           }
         });
       });

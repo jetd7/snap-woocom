@@ -169,11 +169,25 @@ jQuery(document).ready(function($) {
                 $('.payment_box').hide();
                 $('.payment_box.payment_method_snapfinance_refined').show();
                 
+                // One-time takeover bump: clear stale awaiting payment and set chosen method to Snap
+                try {
+                    const ajaxurl = (window.snap_params && window.snap_params.ajax_url) || window.ajaxurl || '/wp-admin/admin-ajax.php';
+                    fetch(ajaxurl, {
+                        method: 'POST',
+                        credentials: 'same-origin',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+                        body: new URLSearchParams({ action: 'snap_takeover' }).toString()
+                    }).catch(()=>{});
+                } catch(_) {}
+
                 // Render Snap button
                 debouncedRender();
             } else {
                 // Hide Snap Finance payment box when other method selected
                 $('.payment_box.payment_method_snapfinance_refined').hide();
+                // Optional polish: immediately restore normal submission and clear Snap messages
+                try { window.SnapApplication?.allowCheckoutSubmission?.(); } catch(_) {}
+                try { window.SnapApplication?.clearInlineMessages?.(); } catch(_) {}
             }
         });
     }
@@ -390,6 +404,26 @@ jQuery(document).ready(function($) {
     
     // Initialize when document is ready
     init();
+
+    // Block place order submission when Snap is selected; guide to use Snap button
+    (function blockClassicPlaceOrder(){
+        try {
+            const form = document.querySelector('form.checkout');
+            if (!form) return;
+            form.addEventListener('submit', function(ev){
+                const selected = document.querySelector('input[name="payment_method"]:checked');
+                if (selected && selected.value === 'snapfinance_refined') {
+                    console.log('🚫 Blocking Classic place order submit (Snap selected)');
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    try { window.SnapApplication?.showInlineMessage?.('Use Check eligibility to continue with Snap Finance. We will place the order for you when signing is complete.', 'info'); } catch(_) {}
+                    // Ensure button is rendered
+                    setTimeout(() => { if (window.SnapRender?.render) window.SnapRender.render(); }, 100);
+                    return false;
+                }
+            }, true);
+        } catch(_) {}
+    })();
     
     // Classic-only: observe the payment box for DOM swaps and recover the host/container
     (function setupClassicObserver(){

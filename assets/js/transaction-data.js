@@ -101,7 +101,7 @@
       // Validate terms and conditions checkbox
       const termsCheckbox = document.querySelector('#terms');
       if (termsCheckbox && !termsCheckbox.checked) {
-        msgs.push('Please accept the terms and conditions');
+        msgs.push('Please accept the terms and conditions to continue.');
       }
 
       // Validate shipping address if "ship to different address" is checked

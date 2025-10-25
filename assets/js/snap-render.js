@@ -889,6 +889,14 @@ window.SnapRender = {
                         // Do not manipulate host opacity/visibility; allow SDK to paint immediately
 
                         try {
+                            // Rebuild transaction just before calling SDK to ensure freshness
+                            try {
+                                const rebuilt = window.SnapTransaction?.build?.(window.snap_params || {});
+                                if (rebuilt) {
+                                    buttonConfig.transaction = rebuilt;
+                                    containerEl.dataset.transactionData = JSON.stringify(rebuilt);
+                                }
+                            } catch(_) {}
                             const configWithTarget = Object.assign({}, buttonConfig, { target: host });
                             console.log('🎯 Calling SDK with target host:', host);
                             snapuk.checkout.button(configWithTarget);
@@ -1427,6 +1435,11 @@ window.SnapRender = {
                     return false;
                 } else {
                     this.clearGenericWarning(containerEl);
+                    // Clear Woo error banners if now valid (prevents stale blocks)
+                    try {
+                        const groups = document.querySelectorAll('.woocommerce-NoticeGroup-checkout, .woocommerce-error, .woocommerce-notice--error');
+                        groups.forEach(g => g.remove());
+                    } catch(_) {}
                 }
             } catch(_) {}
             

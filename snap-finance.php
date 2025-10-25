@@ -3,7 +3,7 @@
  * Plugin Name: Snap Finance Payment Gateway
  * Plugin URI:  https://finmatch.co.uk
  * Description: Allow customers to apply for finance through Snap Finance UK (Classic & Blocks).
- * Version:     1.0.37
+ * Version:     1.0.41
  * Author:      FinMatch
  * Author URI:  https://finmatch.co.uk
  * Text Domain: snap-finance-gateway
@@ -23,7 +23,7 @@ if ( ! defined( 'SNAP_FINANCE_PLUGIN_VERSION' ) ) {
         require_once ABSPATH . 'wp-admin/includes/plugin.php';
     }
     $data = function_exists( 'get_file_data' ) ? get_file_data( __FILE__, array( 'Version' => 'Version' ) ) : array();
-    define( 'SNAP_FINANCE_PLUGIN_VERSION', isset( $data['Version'] ) && $data['Version'] ? $data['Version'] : '1.0.37' );
+    define( 'SNAP_FINANCE_PLUGIN_VERSION', isset( $data['Version'] ) && $data['Version'] ? $data['Version'] : '1.0.41' );
 }
 
 /**
@@ -425,6 +425,27 @@ function snap_clear_application_cb() {
     }
 }
 
+// Takeover: clear order_awaiting_payment if non-Snap; set chosen method to Snap
+add_action('wp_ajax_snap_takeover', 'snap_takeover_cb');
+add_action('wp_ajax_nopriv_snap_takeover', 'snap_takeover_cb');
+function snap_takeover_cb() {
+    try {
+        if ( function_exists( 'WC' ) && WC()->session ) {
+            $awaiting = (int) ( WC()->session->get( 'order_awaiting_payment' ) ?: 0 );
+            if ( $awaiting > 0 ) {
+                $order = wc_get_order( $awaiting );
+                if ( $order && ( $order->get_payment_method() !== 'snapfinance_refined' || $order->get_status() !== 'checkout-draft' ) ) {
+                    WC()->session->__unset( 'order_awaiting_payment' );
+                }
+            }
+            WC()->session->set( 'chosen_payment_method', 'snapfinance_refined' );
+        }
+        wp_send_json_success( array( 'ok' => true ) );
+    } catch ( Throwable $e ) {
+        wp_send_json_error( array( 'ok' => false ), 500 );
+    }
+}
+
 /** ------------------------------------------------------------------------
  * Helpers for REST finalize mapping and cleanup
  * --------------------------------------------------------------------- */
@@ -504,22 +525,22 @@ if ( ! function_exists( 'snap_apply_progress_to_order' ) ) {
         switch ( $progressStatus ) {
             case 2: // PENDING → processing + note (awaiting decision)
                 if ( 'processing' !== $order->get_status() ) { $order->update_status( 'processing' ); }
-                snap_add_note( $order, 'Application pending. Awaiting decision.' );
+                snap_add_note( $order, '[2] Pending — Application pending. Awaiting decision.' );
                 break;
 
             case 6: // APPROVED → processing + note (awaiting customer action)
                 if ( 'processing' !== $order->get_status() ) { $order->update_status( 'processing' ); }
-                snap_add_note( $order, 'Application approved. Awaiting customer actions.' );
+                snap_add_note( $order, '[6] Approved — Awaiting customer actions.' );
                 break;
 
             case 10: // APPROVED_WITH_CONDITIONS → processing + note
                 if ( 'processing' !== $order->get_status() ) { $order->update_status( 'processing' ); }
-                snap_add_note( $order, 'Application approved with conditions.' );
+                snap_add_note( $order, '[10] Approved with conditions.' );
                 break;
 
             case 22: // PENDING_DOCS → processing + note
                 if ( 'processing' !== $order->get_status() ) { $order->update_status( 'processing' ); }
-                snap_add_note( $order, 'Application requires additional documents.' );
+                snap_add_note( $order, '[22] Pending docs — Additional documents required.' );
                 break;
 
             case 26: // PENDING_DEL (signed; awaiting delivery)
@@ -527,41 +548,41 @@ if ( ! function_exists( 'snap_apply_progress_to_order' ) ) {
                 if ( 'checkout-draft' === $order->get_status() ) {
                     $order->update_status( 'pending' );
                 }
-                snap_add_note( $order, 'Customer signed; awaiting merchant delivery. Once the customer has received goods/service please confirm in your Snap Merchant Portal for next day payment.' );
+                snap_add_note( $order, '[26] Signed — Awaiting merchant delivery. Once the customer has received goods/service please confirm in your Snap Merchant Portal for next day payment.' );
                 break;
 
             case 0: // FUNDED → mark paid; ensure processing + note
                 if ( ! $order->is_paid() ) {
                     $order->payment_complete();
-                    snap_add_note( $order, 'Funded. Payment complete.' );
+                    snap_add_note( $order, '[0] Funded — Payment complete.' );
                 } else {
                     if ( 'processing' !== $order->get_status() && 'completed' !== $order->get_status() ) {
                         $order->update_status( 'processing' );
                     }
-                    snap_add_note( $order, 'Already paid; confirming FUNDED state.' );
+                    snap_add_note( $order, '[0] Funded — Already paid; confirming FUNDED state.' );
                 }
                 break;
 
             case 30: // COMPLETE (terminal success) → mark paid; completed + note
                 if ( ! $order->is_paid() ) { $order->payment_complete(); }
                 if ( 'completed' !== $order->get_status() ) { $order->update_status( 'completed' ); }
-                snap_add_note( $order, 'Snap lifecycle complete.' );
+                snap_add_note( $order, '[30] Complete — Snap lifecycle complete.' );
                 break;
 
             case 14: // DENIED → failed + decline note
                 if ( 'failed' !== $order->get_status() ) { $order->update_status( 'failed' ); }
-                snap_add_note( $order, 'Customer was declined by Snap. Try another lender or payment method. Customer can apply again with Snap in 30 days' );
+                snap_add_note( $order, '[14] Denied — Customer was declined by Snap. Try another lender or payment method. Customer can apply again with Snap in 30 days.' );
                 break;
 
             case 18: // WITHDRAWN → cancelled + note
                 if ( 'cancelled' !== $order->get_status() ) { $order->update_status( 'cancelled' ); }
-                snap_add_note( $order, 'Application withdrawn by customer.' );
+                snap_add_note( $order, "[18] Withdrawn — Customer's Snap application was cancelled before completion. Customer may contact Snap Finance for the specific reason and may be able to correct issues and try again." );
                 break;
 
             case -1: // ERROR/UNKNOWN → on-hold + diagnostic note
             default:
                 if ( 'on-hold' !== $order->get_status() ) { $order->update_status( 'on-hold' ); }
-                snap_add_note( $order, 'Snap returned an error or unknown status. Manual check required.' );
+                snap_add_note( $order, '[-1] Error/Unknown — Technical delay reported by Snap; decision will be emailed; order kept on-hold.' );
                 break;
         }
 
@@ -756,6 +777,7 @@ add_action( 'rest_api_init', function() {
             'shipping_method_id'   => array( 'required' => false ),
             'shipping_method_title'=> array( 'required' => false ),
             'order_note'           => array( 'required' => false ),
+            'order_total_snapshot' => array( 'required' => false ),
         ),
     ) );
 
@@ -821,6 +843,23 @@ if ( ! function_exists( 'snap_rest_attach_cb' ) ) {
             // ========================================================================
             // ORDER LOOKUP CASCADE - Tries multiple methods in priority order
             // ========================================================================
+
+            // Idempotency: if an order is already attached to this application, use it first
+            try {
+                $existing_for_app = wc_get_orders( array(
+                    'limit'      => 1,
+                    'return'     => 'ids',
+                    'meta_key'   => '_snap_application_id',
+                    'meta_value' => $app_id,
+                    'orderby'    => 'date',
+                    'order'      => 'DESC',
+                ) );
+                if ( ! empty( $existing_for_app ) ) {
+                    $order_id = (int) $existing_for_app[0];
+                    $lookup_method = 'app_meta_exact';
+                    try { snap_orders_log( 'attach_lookup', array( 'source' => 'rest', 'method' => $lookup_method, 'order_id' => (string) $order_id, 'application_id' => $app_id ) ); } catch ( Throwable $e ) {}
+                }
+            } catch ( Throwable $e ) {}
             
             // Method 1: Session order_awaiting_payment - Primarily for Blocks checkout
             if ( function_exists( 'WC' ) && WC()->session ) {
@@ -952,31 +991,101 @@ if ( ! function_exists( 'snap_rest_attach_cb' ) ) {
                 }
             }
             
-            // Final check: no order found at all
-            if ( ! $order_id ) {
-                // Store in session as fallback for order creation hook
-                if ( function_exists( 'WC' ) && WC()->session ) {
-                    WC()->session->set( 'snap_application_id_pending', $app_id );
-                    WC()->session->set( 'snap_invoice_number_pending', $invoice );
-                    try { 
-                        snap_orders_log( 'attach_deferred', array( 
-                            'source' => 'rest', 
-                            'application_id' => $app_id,
-                            'invoice_number' => $invoice,
-                            'note' => 'no_order_found_stored_in_session_for_creation_hook'
-                        ) ); 
-                    } catch ( Throwable $e ) {}
-                } else {
-                    try { 
-                        snap_orders_log( 'attach_failed', array( 
-                            'source' => 'rest', 
-                            'application_id' => $app_id,
-                            'invoice_number' => $invoice,
-                            'note' => 'no_order_found_no_session'
-                        ) ); 
-                    } catch ( Throwable $e ) {}
+            // If we found a draft but it already belongs to a different app, ignore it
+            if ( $order_id ) {
+                $maybe = wc_get_order( (int) $order_id );
+                if ( $maybe ) {
+                    $existing_app_on_order = (string) $maybe->get_meta( '_snap_application_id' );
+                    if ( $existing_app_on_order && $existing_app_on_order !== $app_id ) {
+                        try { snap_orders_log( 'attach_skip_foreign_draft', array( 'source' => 'rest', 'order_id' => (string) $order_id, 'application_id' => $app_id, 'existing' => $existing_app_on_order ) ); } catch ( Throwable $e ) {}
+                        $order_id = 0; // force new create below
+                    }
                 }
-                return new WP_REST_Response( array( 'ok' => false, 'reason' => 'no_order_found', 'deferred' => true ), 200 );
+            }
+
+            // Final check: no usable order found → create a new checkout-draft for this app
+            if ( ! $order_id ) {
+                try {
+                    $new = wc_create_order( array( 'status' => 'checkout-draft', 'customer_id' => get_current_user_id() ) );
+                    if ( $new ) {
+                        $new->set_payment_method( 'snapfinance_refined' );
+                        $new->set_payment_method_title( 'Snap Finance' );
+                        if ( $invoice !== '' )  { $new->update_meta_data( '_snap_invoice_number', $invoice ); }
+                        $new->update_meta_data( '_snap_application_id', $app_id );
+                        // Apply provided billing/shipping snapshots
+                        $apply_text = function( $v ) { return sanitize_text_field( (string) $v ); };
+                        $apply_email = function( $v ) { return sanitize_email( (string) $v ); };
+                        $bf_fn = (string) ( $r->get_param( 'billing_first_name' ) ?? '' ); if ( $bf_fn ) $new->set_billing_first_name( $apply_text( $bf_fn ) );
+                        $bf_ln = (string) ( $r->get_param( 'billing_last_name' ) ?? '' );  if ( $bf_ln ) $new->set_billing_last_name( $apply_text( $bf_ln ) );
+                        $bf_em = (string) ( $r->get_param( 'billing_email' ) ?? '' );       if ( $bf_em ) $new->set_billing_email( $apply_email( $bf_em ) );
+                        $bf_ph = (string) ( $r->get_param( 'billing_phone' ) ?? '' );       if ( $bf_ph ) $new->set_billing_phone( $apply_text( $bf_ph ) );
+                        $bf_a1 = (string) ( $r->get_param( 'billing_address_1' ) ?? '' );   if ( $bf_a1 ) $new->set_billing_address_1( $apply_text( $bf_a1 ) );
+                        $bf_a2 = (string) ( $r->get_param( 'billing_address_2' ) ?? '' );   if ( $bf_a2 ) $new->set_billing_address_2( $apply_text( $bf_a2 ) );
+                        $bf_ci = (string) ( $r->get_param( 'billing_city' ) ?? '' );        if ( $bf_ci ) $new->set_billing_city( $apply_text( $bf_ci ) );
+                        $bf_pc = (string) ( $r->get_param( 'billing_postcode' ) ?? '' );    if ( $bf_pc ) $new->set_billing_postcode( $apply_text( $bf_pc ) );
+                        // Shipping (optional)
+                        $sf_fn = (string) ( $r->get_param( 'shipping_first_name' ) ?? '' ); if ( $sf_fn ) $new->set_shipping_first_name( $apply_text( $sf_fn ) );
+                        $sf_ln = (string) ( $r->get_param( 'shipping_last_name' ) ?? '' );  if ( $sf_ln ) $new->set_shipping_last_name( $apply_text( $sf_ln ) );
+                        $sf_a1 = (string) ( $r->get_param( 'shipping_address_1' ) ?? '' );  if ( $sf_a1 ) $new->set_shipping_address_1( $apply_text( $sf_a1 ) );
+                        $sf_a2 = (string) ( $r->get_param( 'shipping_address_2' ) ?? '' );  if ( $sf_a2 ) $new->set_shipping_address_2( $apply_text( $sf_a2 ) );
+                        $sf_ci = (string) ( $r->get_param( 'shipping_city' ) ?? '' );       if ( $sf_ci ) $new->set_shipping_city( $apply_text( $sf_ci ) );
+                        $sf_pc = (string) ( $r->get_param( 'shipping_postcode' ) ?? '' );   if ( $sf_pc ) $new->set_shipping_postcode( $apply_text( $sf_pc ) );
+
+                        // Shipping method
+                        $rate_id   = sanitize_text_field( (string) ( $r->get_param( 'shipping_method_id' ) ?? '' ) );
+                        $rate_title= sanitize_text_field( (string) ( $r->get_param( 'shipping_method_title' ) ?? '' ) );
+                        if ( $rate_id !== '' ) {
+                            $item = new WC_Order_Item_Shipping();
+                            $item->set_method_id( $rate_id );
+                            if ( $rate_title !== '' ) { $item->set_method_title( $rate_title ); }
+                            $new->add_item( $item );
+                        }
+
+                        // Customer note
+                        $note = (string) ( $r->get_param( 'order_note' ) ?? '' );
+                        if ( $note !== '' ) {
+                            $new->add_order_note( 'Customer note: ' . sanitize_textarea_field( $note ) );
+                        }
+
+                        // Add cart items if available; else fallback to snapshot total
+                        $addedLine = false;
+                        try {
+                            if ( function_exists( 'WC' ) && WC()->cart ) {
+                                foreach ( WC()->cart->get_cart() as $cart_item ) {
+                                    $product = isset( $cart_item['data'] ) ? $cart_item['data'] : wc_get_product( $cart_item['product_id'] );
+                                    if ( $product ) {
+                                        $new->add_product( $product, isset( $cart_item['quantity'] ) ? (int) $cart_item['quantity'] : 1, array( 'variation_id' => isset( $cart_item['variation_id'] ) ? (int) $cart_item['variation_id'] : 0 ) );
+                                        $addedLine = true;
+                                    }
+                                }
+                            }
+                        } catch ( Throwable $e ) {}
+                        if ( ! $addedLine ) {
+                            // Fallback: add a fee/line to match snapshot total if provided
+                            $snap_total = (string) ( $r->get_param( 'order_total_snapshot' ) ?? '' );
+                            $snap_num = is_numeric( $snap_total ) ? (float) $snap_total : 0.0;
+                            if ( $snap_num > 0 ) {
+                                $fee = new WC_Order_Item_Fee();
+                                $fee->set_name( 'Snap Purchase' );
+                                $fee->set_amount( $snap_num );
+                                $fee->set_total( $snap_num );
+                                $new->add_item( $fee );
+                            }
+                        }
+
+                        try { $new->calculate_totals(); } catch ( Throwable $e ) {}
+                        $order_id = (int) $new->save();
+                        $lookup_method = 'created_new_draft';
+                        // Add explicit takeover note
+                        try { $new->add_order_note( 'Snap takeover from non‑Snap session (' . ( function_exists('wc_current_theme_is_fse_theme') && wc_current_theme_is_fse_theme() ? 'Blocks' : 'Classic' ) . ')' ); $new->save(); } catch ( Throwable $e ) {}
+                        try { snap_orders_log( 'attach_created_draft', array( 'source' => 'rest', 'order_id' => (string) $order_id, 'application_id' => $app_id ) ); } catch ( Throwable $e ) {}
+                    }
+                } catch ( Throwable $e ) {
+                    try { snap_orders_log( 'attach_create_draft_failed', array( 'source' => 'rest', 'application_id' => $app_id ) ); } catch ( Throwable $e2 ) {}
+                }
+                if ( ! $order_id ) {
+                    return new WP_REST_Response( array( 'ok' => false, 'reason' => 'no_order_found', 'deferred' => true ), 200 );
+                }
             }
 
             $order = wc_get_order( $order_id );
@@ -1187,6 +1296,25 @@ function snap_rest_funded_cb( WP_REST_Request $request ) {
                 'order_received_url' => ( in_array( (int) $progress, array( 26, 0, 30 ), true ) ) ? $seeded_order->get_checkout_order_received_url() : null,
                     ), 200 );
                 }
+
+                // Safety: if order has no items or total is 0 but we have a snapshot, add a one-off fee
+                try {
+                    $has_items = count( $seeded_order->get_items() ) > 0;
+                    $total_now = (float) $seeded_order->get_total();
+                    if ( ( ! $has_items || $total_now <= 0 ) ) {
+                        $sess = ( function_exists( 'WC' ) && WC()->session ) ? (array) WC()->session->get( 'snap_application' ) : array();
+                        $snap_total = isset( $sess['total'] ) ? (float) $sess['total'] : 0.0;
+                        if ( $snap_total > 0 ) {
+                            $fee = new WC_Order_Item_Fee();
+                            $fee->set_name( 'Snap Purchase' );
+                            $fee->set_amount( $snap_total );
+                            $fee->set_total( $snap_total );
+                            $seeded_order->add_item( $fee );
+                            try { $seeded_order->calculate_totals(); } catch ( Throwable $e ) {}
+                            $seeded_order->save();
+                        }
+                    }
+                } catch ( Throwable $e ) {}
 
                 // Apply the new status to this order (only mark paid on FUNDED)
                 // Do not upshift status away from failed/cancelled; only update meta/notes in that case

@@ -129,6 +129,7 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
         // Build a lightweight billing snapshot to hydrate draft order details
         let billing = {};
         let shipping = {};
+        let totalSnapshot = null;
         try {
           if (window.SnapTransaction && typeof window.SnapTransaction.getCustomer === 'function') {
             const c = window.SnapTransaction.getCustomer(window.snap_params || {});
@@ -143,6 +144,14 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
               billing_postcode:   c.postcode || ''
             };
           }
+          // Capture a total snapshot for draft creation fallback
+          try {
+            if (window.SnapTransaction && typeof window.SnapTransaction.getTotalMajor === 'function') {
+              totalSnapshot = window.SnapTransaction.getTotalMajor(window.snap_params || {});
+            } else if (window.snap_params && window.snap_params.cart_total) {
+              totalSnapshot = String(window.snap_params.cart_total);
+            }
+          } catch(_) {}
           // Read Classic DOM for shipping if present (Blocks may not expose separate shipping fields)
           const get = (sel) => { try { const el = document.querySelector(sel); return el ? String(el.value || '').trim() : ''; } catch(_) { return ''; } };
           const shipDifferent = (() => { try { const cb = document.querySelector('#ship-to-different-address-checkbox'); return !!(cb && cb.checked); } catch(_) { return false; } })();
@@ -184,7 +193,7 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
             'X-WP-Nonce': window.snap_params?.rest_nonce || window.snap_params?.restNonce || window.wpApiSettings?.nonce || ''
           },
           credentials: 'same-origin',
-          body: JSON.stringify(Object.assign({ application_id: appId, progress_status: status, invoice_number: invoice }, billing, shipping))
+          body: JSON.stringify(Object.assign({ application_id: appId, progress_status: status, invoice_number: invoice, order_total_snapshot: totalSnapshot }, billing, shipping))
         });
         const json = await res.json().catch(() => ({}));
         if (!res.ok || !json?.order_id) {
@@ -470,9 +479,13 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
         // Stop URL watcher on success
         try { __stopUrlCompletionWatcher(); } catch(_) {}
 
-        // Refresh server session to reflect funded status
+        // Refresh server session to reflect funded status and store total snapshot
         try {
           if (typeof this.saveSnapApp === 'function') {
+            const total = (window.SnapTransaction && typeof window.SnapTransaction.getTotalMajor === 'function') ? window.SnapTransaction.getTotalMajor(window.snap_params || {}) : null;
+            if (window.SnapStorage && window.SnapStorage.set) {
+              try { window.SnapStorage.set('application', Object.assign({}, (this.getApp()||{}), { total: total ? Number(total) : undefined })); } catch(_) {}
+            }
             this.saveSnapApp(appId, token).catch((err) => {
               const status = err && (err.response?.status || err.status) || 'unknown';
               console.warn('[Snap] save_snap_application non-blocking error; continuing checkout', { status });
@@ -574,8 +587,9 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
       // Update localStorage
       this.updateStorage('error');
       
-      // Allow checkout submission (user can choose another payment method)
-      this.allowCheckoutSubmission();
+      // Keep blocked and show technical delay guidance
+      this.blockCheckoutSubmission();
+      try { this.showInlineMessage('Technical delay — Snap will email you the decision. You can resume from the link in your email.', 'info'); } catch(_) {}
     },
 
     onUnverifiedAccount(appId, token) {
@@ -588,6 +602,13 @@ console.log('🔧 SnapApplication Loaded:', (window.snap_params && window.snap_p
 
     onWithdrawn(appId, token) {
       console.warn('🚫 [SDK ▶] onWithdrawn', { appId });
+      applicationStatus = 'withdrawn';
+      applicationId = appId;
+      applicationToken = token;
+      // Keep checkout submission blocked while Snap is selected
+      this.blockCheckoutSubmission();
+      // Customer message (two-line)
+      try { this.showInlineMessage('Withdrawn — Your Snap application was cancelled before completion.\nPlease contact Snap Finance for the specific reason; you may be able to correct issues and try again.', 'warning'); } catch(_) {}
     },
 
     isBlocks() {
